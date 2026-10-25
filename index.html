@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Call AI</title>
+  <style>
+    :root {
+      --bg: #f2f2f2;
+      --btn: #1a73e8;
+      --btn-on: #0b5cab;
+      --text: #222;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: var(--bg);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      color: var(--text);
+    }
+    main {
+      min-height: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 1.25rem;
+      padding: 2rem;
+    }
+    /* ~3 home-screen icons wide: icons ~60–70px → button ~180–210px; use 42vmin capped */
+    button#talk {
+      width: min(42vmin, 220px);
+      height: min(42vmin, 220px);
+      border: 0;
+      border-radius: 50%;
+      background: var(--btn);
+      color: #fff;
+      cursor: pointer;
+      box-shadow: 0 10px 28px rgba(0,0,0,.18);
+      display: grid;
+      place-items: center;
+      -webkit-tap-highlight-color: transparent;
+    }
+    button#talk[aria-pressed="true"] {
+      background: var(--btn-on);
+      box-shadow: 0 0 0 8px rgba(26,115,232,.25);
+    }
+    button#talk svg { width: 42%; height: 42%; }
+    .label {
+      font-size: clamp(1.25rem, 4vw, 1.75rem);
+      font-weight: 700;
+      margin: 0;
+    }
+    .status {
+      min-height: 1.5em;
+      font-size: 1rem;
+      opacity: .75;
+      text-align: center;
+      max-width: 20rem;
+    }
+    .meta {
+      position: fixed;
+      bottom: 1rem;
+      left: 0;
+      right: 0;
+      text-align: center;
+      font-size: .85rem;
+      opacity: .55;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <button id="talk" type="button" aria-pressed="false" aria-label="Live talk">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3Z" fill="currentColor"/>
+        <path d="M19 11a1 1 0 1 0-2 0 5 5 0 0 1-10 0 1 1 0 1 0-2 0 7 7 0 0 0 6 6.93V21H9a1 1 0 1 0 0 2h6a1 1 0 1 0 0-2h-2v-3.07A7 7 0 0 0 19 11Z" fill="currentColor"/>
+      </svg>
+    </button>
+    <p class="label" id="label">Live talk</p>
+    <p class="status" id="status">Tap to open. Tap again to close.</p>
+  </main>
+  <p class="meta">Call AI · no login · 5 min/day (demo timer)</p>
+  <script>
+    const btn = document.getElementById('talk');
+    const label = document.getElementById('label');
+    const status = document.getElementById('status');
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const LIMIT_MS = 5 * 60 * 1000;
+    let open = false;
+    let tick = null;
+
+    function dayKey() {
+      const d = new Date();
+      return d.getFullYear() + '-' + (d.getMonth()+1) + '-' + d.getDate();
+    }
+    function getUsed() {
+      try {
+        const raw = localStorage.getItem('callai-used');
+        if (!raw) return { day: dayKey(), ms: 0 };
+        const data = JSON.parse(raw);
+        if (data.day !== dayKey()) return { day: dayKey(), ms: 0 };
+        return data;
+      } catch { return { day: dayKey(), ms: 0 }; }
+    }
+    function setUsed(ms) {
+      localStorage.setItem('callai-used', JSON.stringify({ day: dayKey(), ms }));
+    }
+    function remaining() {
+      return Math.max(0, LIMIT_MS - getUsed().ms);
+    }
+    function fmt(ms) {
+      const s = Math.ceil(ms / 1000);
+      const m = Math.floor(s / 60);
+      const r = s % 60;
+      return m + ':' + String(r).padStart(2, '0');
+    }
+    function closeTalk(reason) {
+      open = false;
+      btn.setAttribute('aria-pressed', 'false');
+      label.textContent = 'Live talk';
+      if (tick) { clearInterval(tick); tick = null; }
+      status.textContent = reason || 'Closed. Tap to open.';
+    }
+    function openTalk() {
+      const left = remaining();
+      if (left <= 0) {
+        status.textContent = 'Today’s 5 minutes are used. Come back tomorrow.';
+        return;
+      }
+      open = true;
+      btn.setAttribute('aria-pressed', 'true');
+      label.textContent = 'Listening…';
+      status.textContent = 'Open · ' + fmt(left) + ' left today (AI hookup next).';
+      const started = Date.now();
+      let base = getUsed().ms;
+      tick = setInterval(() => {
+        const used = base + (Date.now() - started);
+        setUsed(used);
+        const leftNow = Math.max(0, LIMIT_MS - used);
+        if (leftNow <= 0) {
+          closeTalk('Time’s up for today. Come back tomorrow.');
+          return;
+        }
+        status.textContent = 'Open · ' + fmt(leftNow) + ' left today (AI hookup next).';
+      }, 500);
+    }
+    btn.addEventListener('click', () => {
+      if (open) closeTalk('Closed. Tap to open.');
+      else openTalk();
+    });
+  </script>
+</body>
+</html>

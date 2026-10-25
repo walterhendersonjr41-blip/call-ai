@@ -162,6 +162,7 @@
     #c1 { background: #1a73e8; }
     #c2 { background: #5f6368; }
   </style>
+<link rel="manifest" href="manifest.webmanifest"><meta name="theme-color" content="#1a73e8"><link rel="apple-touch-icon" href="icons/icon-192.png"><link rel="icon" href="icons/icon-192.png">
 </head>
 <body>
   <button id="gear" type="button" aria-label="Settings" title="Settings">
@@ -1264,5 +1265,6 @@
     };
   })();
   </script>
+<script>if('serviceWorker' in navigator)addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));</script>
 </body>
 </html>

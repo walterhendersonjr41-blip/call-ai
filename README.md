@@ -1,6 +1,6 @@
 # Call AI
 
-Two giant buttons: **Live talk** and **Camera**. Tap to open, tap again to close. No login. Each visitor gets 5 minutes of talk time per day (tracked in the browser).
+Two giant buttons: **Live talk** and **Camera**. Everything else, like the history guide, works by just asking. Tap to open, tap again to close. No login. Each visitor gets 5 minutes of talk time per day (tracked in the browser).
 
 ## What it does
 - **Listens** with the browser's built-in speech recognition (Chrome, Edge, Safari), hands-free: you talk, it answers out loud, then listens again.
@@ -24,6 +24,14 @@ Two giant buttons: **Live talk** and **Camera**. Tap to open, tap again to close
 - **With your own xAI or Gemini key** (Settings): the photo, shrunk to 1024 px JPEG, goes straight to that AI's vision model, so it can also describe objects, handwriting and pictures. If that fails, it falls back to the free text reader.
 - If the live camera is blocked or missing, tapping the picture area opens the phone's normal photo picker instead.
 - Needs HTTPS (GitHub Pages is), and works in Android Chrome and iPhone Safari.
+
+## History around me (just ask, no button)
+- Say or type things like *"What's the history around me?"*, *"Where am I?"*, *"Tell me about this place"*, *"Any history near me?"* or *"What's the history of Chattanooga?"*. There's no extra button. It works by asking.
+- It asks the phone for your **location** (you'll see the normal "Allow location" prompt), finds the town with **OpenStreetMap Nominatim** (free, no key, at most 1 lookup a second), then pulls real nearby places within about 6 miles (10 km) from **Wikipedia** with short summaries.
+- The AI tells it like a friendly local tour guide: a few short sentences, one surprising fact, then it offers more or something nearby. You can follow up ("tell me more about the battle") and it sticks to the same facts.
+- It only uses the Wikipedia facts it found and **never makes up history**. If it doesn't have something, it says so.
+- If location is blocked or off, it asks you to say where you are ("I'm at Rock City") and looks that place up on Wikipedia instead. If a name could mean more than one place, it says which one it picked so you can correct it.
+- Questions like "history of the Super Bowl" that aren't about a place get a normal answer.
 
 ## Files
 - `index.html`: the whole app. It's static, works on GitHub Pages, and has no server and no keys in the code.

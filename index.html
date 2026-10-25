@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="callai-version" content="3.0-camera" />
+  <meta name="callai-version" content="3.1-history" />
   <title>Call AI</title>
   <style>
     :root {
@@ -527,6 +527,158 @@
     }
     function visionReady() { const p = settings.provider; return p !== 'free' && !!settings.key(p); }
 
+    // ---------- History guide: "what's the history around me?" (no button, just ask) ----------
+    const WIKI = 'https://en.wikipedia.org/w/api.php';
+    let tour = null;          // { where, facts } kept so follow-ups ("tell me more") use the same real facts
+    let awaitingPlace = false; // asked the caller to say where they are
+    let lastNominatim = 0;
+    const HERE_WORDS = /\b(where am i|around me|near me|nearby|close by|around here|near here|this place|this area|this town|this spot|about here|my area|my town|where i am|where i m at|here)\b/;
+    function historyIntent(text) {
+      const s = norm(text);
+      if (!s) return null;
+      if (/\bwhere am i\b/.test(s)) return { here: true };
+      const placeAsk = /\b(tell me about|what s the story of|whats the story of|story of)\s+(here|this place|this area|this town|where i am|around here)\b/.test(s);
+      if (placeAsk) return { here: true };
+      const hist = /\b(history|historic|historical|landmarks?|sights to see)\b/.test(s);
+      if (!hist) return null;
+      const m = s.match(/\b(?:history|historic sites|historical sites|landmarks)\s+(?:of|in|at|around|near|about|for)\s+(.+)$/);
+      if (m) {
+        const place = m[1].replace(/\b(please|today|for me|real quick)\b/g, '').trim();
+        if (place && !HERE_WORDS.test(' ' + place + ' ') && !/^(me|us|it|that|this|my area|where i am)$/.test(place)) return { place };
+      }
+      if (HERE_WORDS.test(s) || /^(tell me some |give me some |what s the |whats the |any )?(local )?history\b/.test(s) || /\blocal history\b/.test(s)) return { here: true };
+      return null;
+    }
+    function getPosition() {
+      return new Promise((res, rej) => {
+        if (!navigator.geolocation || !window.isSecureContext) return rej(new Error('nogeo'));
+        navigator.geolocation.getCurrentPosition(p => res({ lat: p.coords.latitude, lon: p.coords.longitude }), rej,
+          { enableHighAccuracy: false, timeout: 15000, maximumAge: 300000 });
+      });
+    }
+    async function reverseGeocode(lat, lon) {
+      // OpenStreetMap Nominatim: keyless, max 1 request per second.
+      const wait = 1100 - (Date.now() - lastNominatim);
+      if (wait > 0) await new Promise(r => setTimeout(r, wait));
+      lastNominatim = Date.now();
+      const d = await fetchJSON('https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=16&addressdetails=1&accept-language=en&lat=' +
+        lat.toFixed(5) + '&lon=' + lon.toFixed(5), { headers: { 'Accept': 'application/json' } }, 12000);
+      const a = (d && d.address) || {};
+      const town = a.city || a.town || a.village || a.hamlet || a.suburb || a.county || '';
+      return { town, state: a.state || '', country: a.country || '', label: [a.road && (a.neighbourhood || a.hamlet) ? (a.neighbourhood || a.hamlet) : '', town, a.state].filter(Boolean).filter((v, i, x) => x.indexOf(v) === i).join(', ') };
+    }
+    async function wikiNearby(lat, lon) {
+      const d = await fetchJSON(WIKI + '?action=query&list=geosearch&gscoord=' + lat.toFixed(5) + '|' + lon.toFixed(5) +
+        '&gsradius=10000&gslimit=8&format=json&origin=*', {}, 12000);
+      return ((d && d.query && d.query.geosearch) || []).map(g => ({ id: g.pageid, title: g.title, miles: g.dist / 1609.34 }));
+    }
+    async function wikiExtracts(ids) {
+      if (!ids.length) return {};
+      const d = await fetchJSON(WIKI + '?action=query&prop=extracts&exintro=1&explaintext=1&exsentences=4&exlimit=20&redirects=1&format=json&origin=*&pageids=' +
+        ids.join('|'), {}, 12000);
+      const out = {};
+      Object.values((d && d.query && d.query.pages) || {}).forEach(pg => { if (pg && pg.extract) out[pg.pageid] = { title: pg.title, text: pg.extract.replace(/\s+/g, ' ').trim() }; });
+      return out;
+    }
+    async function wikiSummary(title) { // REST summary fallback
+      try {
+        const d = await fetchJSON('https://en.wikipedia.org/api/rest_v1/page/summary/' + encodeURIComponent(title.replace(/ /g, '_')), {}, 10000);
+        return d && d.type !== 'disambiguation' && d.extract ? { title: d.title, text: d.extract, lat: d.coordinates && d.coordinates.lat, lon: d.coordinates && d.coordinates.lon } : null;
+      } catch (e) { return null; }
+    }
+    async function wikiFindPlace(q, strict) {
+      // Search Wikipedia, skip disambiguation pages, prefer a real place (has map coordinates) whose name matches what they said.
+      q = q.replace(/[?.!]+$/, '').trim();
+      const d = await fetchJSON(WIKI + '?action=query&generator=search&gsrlimit=8&gsrsearch=' + encodeURIComponent(q) +
+        '&prop=coordinates|pageprops&ppprop=disambiguation&format=json&origin=*', {}, 12000);
+      const pages = Object.values((d && d.query && d.query.pages) || {}).filter(pg => !(pg.pageprops && 'disambiguation' in pg.pageprops))
+        .sort((x, y) => x.index - y.index);
+      if (!pages.length) return null;
+      const nq = norm(q).replace(/^(the|downtown|old) /, '');
+      const base = (t) => norm(t.replace(/\s*\([^)]*\)\s*$/, ''));
+      const geo = pages.filter(pg => pg.coordinates);
+      const pick = geo.find(pg => base(pg.title) === nq) || geo.find(pg => nq.split(' ').every(w => base(pg.title).split(' ').indexOf(w) !== -1)) ||
+        geo.find(pg => base(pg.title).indexOf(nq) !== -1) || (strict ? null : geo[0] || pages[0]);
+      if (!pick) return null;
+      return await wikiSummary(pick.title);
+    }
+    async function factsAround(lat, lon, mainTitle) {
+      const near = await wikiNearby(lat, lon);
+      const ex = await wikiExtracts(near.map(n => n.id));
+      const lines = [];
+      near.forEach(n => {
+        const e = ex[n.id];
+        if (!e || e.title === mainTitle) return;
+        lines.push('- ' + e.title + ' (about ' + (n.miles < 0.2 ? 'right here' : n.miles.toFixed(1) + ' miles away') + '): ' + e.text);
+      });
+      return lines;
+    }
+    async function gatherHere() {
+      const pos = await getPosition();
+      let place = { label: '', town: '', state: '' };
+      try { place = await reverseGeocode(pos.lat, pos.lon); } catch (e) { /* still use Wikipedia */ }
+      const lines = await factsAround(pos.lat, pos.lon, '');
+      if (place.town && place.state && !lines.some(l => l.indexOf('- ' + place.town + ',') === 0)) {
+        const sm = await wikiSummary(place.town + ', ' + place.state);
+        if (sm) lines.unshift('- ' + sm.title + ' (the town they are in): ' + sm.text);
+      }
+      return { where: place.label || 'the caller\u2019s current spot', facts: lines };
+    }
+    async function gatherPlace(q, strict) {
+      const sm = await wikiFindPlace(q, strict);
+      if (!sm) return { where: q, facts: [] };
+      if (sm.lat == null) return { where: q, facts: [], notPlace: true };
+      const lines = ['- ' + sm.title + ': ' + sm.text];
+      if (sm.lat != null && sm.lon != null) {
+        try { (await factsAround(sm.lat, sm.lon, sm.title)).slice(0, 6).forEach(l => lines.push(l)); } catch (e) {}
+      }
+      return { where: sm.title, facts: lines, guessed: q };
+    }
+    function tourPrompt(t) {
+      return " You are also a friendly local tour guide. The caller is at or asking about: " + t.where + ". " +
+        "Here are REAL facts from Wikipedia about places there and nearby:\n" + t.facts.join('\n').slice(0, 5000) + "\n" +
+        (t.guessed ? "They only said '" + t.guessed + "', so start by saying which place you mean, and tell them to say the town and state if that's not the one. " : "") +
+        "Use ONLY these facts for history. Never invent names, dates or events; if something isn't in the facts, say you don't know that one. " +
+        "Tell it like a warm local guide in three or four short spoken sentences: where they are, the most interesting history, and one surprising fact. " +
+        "When you first tell them about the place, end by offering more, or to tell them about something else nearby. On follow-ups, just answer from these facts.";
+    }
+    async function historyTurn(intent, text, my) {
+      let t = null, why = '';
+      try {
+        if (intent.place) t = await gatherPlace(intent.place, !intent.asked);
+        else {
+          if (state === 'thinking') setHint('Checking where you are\u2026 allow location if your phone asks.');
+          try { t = await gatherHere(); }
+          catch (e) { why = (e && (e.code === 1 || e.message === 'nogeo')) ? 'denied' : 'failed'; }
+        }
+      } catch (e) { why = 'failed'; }
+      setHint('');
+      if (my !== turnId || !open) return;
+      if (intent.place && !intent.asked && (!t || t.notPlace || !t.facts.length)) return chatTurn(my); // e.g. "history of the Super Bowl": not a place, answer normally
+      if (!t || !t.facts.length) {
+        const msg = (why === 'denied' || why === 'failed')
+          ? 'I can\u2019t see where you are' + (why === 'denied' ? ', since location isn\u2019t turned on for me' : ' right now') + '. Just tell me the town or the place you\u2019re at, and I\u2019ll tell you its history.'
+          : 'I couldn\u2019t find any history for ' + (t ? t.where : 'that place') + '. Tell me the town or landmark another way, and I\u2019ll try again.';
+        awaitingPlace = true;
+        history.push({ role: 'assistant', content: msg });
+        return finishReply(msg, my);
+      }
+      awaitingPlace = false;
+      tour = t;
+      let reply;
+      try {
+        reply = cleanReply(await askAI(buildChatMessages()));
+        if (!reply) throw new Error('empty');
+      } catch (e) {
+        if (my !== turnId || !open) return;
+        const f = t.facts[0].replace(/^- /, '').replace(/\s*\([^)]*\):/, ':');
+        reply = 'Here\u2019s what I found. ' + splitSentences(f).slice(0, 3).join(' ');
+      }
+      if (my !== turnId || !open) return;
+      history.push({ role: 'assistant', content: reply });
+      finishReply(reply, my);
+    }
+
     async function userSaid(text) {
       if (!open || !text) return;
       if (choice) {
@@ -541,6 +693,13 @@
       history.push({ role: 'user', content: text });
       history = history.slice(-MAX_TURNS * 2);
       setState('thinking');
+      let hi = historyIntent(text);
+      if (!hi && awaitingPlace) hi = { place: text.replace(/^\s*(i'?m|i am|we'?re|we are)\s+(at|in|near|by|on)\s+/i, '').replace(/^\s*(at|in|near)\s+/i, ''), asked: true };
+      awaitingPlace = false;
+      if (hi) return historyTurn(hi, text, my);
+      return chatTurn(my);
+    }
+    async function chatTurn(my) {
       let reply;
       try {
         const msgs = buildChatMessages();
@@ -561,6 +720,9 @@
       }
       if (my !== turnId || !open) return;
       history.push({ role: 'assistant', content: reply });
+      finishReply(reply, my);
+    }
+    function finishReply(reply, my) {
       history = history.slice(-MAX_TURNS * 2);
       lastReply = reply;
       addCaption('ai', reply);
@@ -587,6 +749,7 @@
           pre.push({ role: 'assistant', content: [photo.headline, photo.short].filter(Boolean).join(' ') || 'Got it.' });
         }
       }
+      if (tour) sys += tourPrompt(tour);
       return [{ role: 'system', content: sys }].concat(pre, history);
     }
     function isYesNoQuestion(t) {
@@ -702,7 +865,7 @@
         captions.textContent = '';
         interimEl = null;
         history = []; lastReply = '';
-        photo = null;
+        photo = null; tour = null; awaitingPlace = false;
       }
       unlockSpeech();
       if (!SR) {
@@ -1095,7 +1258,9 @@
       get state() { return state; }, get open() { return open; }, get history() { return history.slice(); },
       get photo() { return photo ? { kind: photo.kind, scam: photo.scam, headline: photo.headline, short: photo.short, mode: photo.mode, text: photo.text } : null; },
       get choice() { return choice ? { one: choice.one, two: choice.two } : null; },
-      version: '3.0-camera'
+      get tour() { return tour ? { where: tour.where, facts: tour.facts.slice() } : null; },
+      historyIntent: historyIntent,
+      version: '3.1-history'
     };
   })();
   </script>

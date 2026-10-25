@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="callai-version" content="2.0-voice" />
   <title>Call AI</title>
   <style>
     :root {
@@ -26,9 +27,8 @@
       align-items: center;
       justify-content: center;
       gap: 1.25rem;
-      padding: 2rem;
+      padding: 2rem 2rem 4rem;
     }
-    /* ~3 home-screen icons wide: icons ~60–70px → button ~180–210px; use 42vmin capped */
     button#talk {
       width: min(42vmin, 220px);
       height: min(42vmin, 220px);
@@ -41,10 +41,18 @@
       display: grid;
       place-items: center;
       -webkit-tap-highlight-color: transparent;
+      transition: box-shadow .2s, transform .2s;
     }
     button#talk[aria-pressed="true"] {
       background: var(--btn-on);
       box-shadow: 0 0 0 8px rgba(26,115,232,.25);
+    }
+    button#talk[data-state="listening"] { animation: pulse 1.6s ease-in-out infinite; }
+    button#talk[data-state="speaking"] { box-shadow: 0 0 0 14px rgba(26,115,232,.30); }
+    button#talk[data-state="thinking"] { transform: scale(.96); }
+    @keyframes pulse {
+      0%,100% { box-shadow: 0 0 0 8px rgba(26,115,232,.25); }
+      50% { box-shadow: 0 0 0 18px rgba(26,115,232,.12); }
     }
     button#talk svg { width: 42%; height: 42%; }
     .label {
@@ -58,7 +66,35 @@
       opacity: .75;
       text-align: center;
       max-width: 20rem;
+      margin: 0;
     }
+    #captions {
+      width: 100%;
+      max-width: 26rem;
+      display: flex;
+      flex-direction: column;
+      gap: .5rem;
+      font-size: 1rem;
+      line-height: 1.35;
+    }
+    #captions:empty { display: none; }
+    .cap { padding: .55rem .8rem; border-radius: 14px; max-width: 90%; }
+    .cap.you { align-self: flex-end; background: #dfe9fb; }
+    .cap.ai { align-self: flex-start; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+    .cap.interim { opacity: .6; font-style: italic; }
+    .cap.err { align-self: center; background: #fdecea; color: #8a1c13; font-size: .92rem; }
+    #typeForm { display: none; width: 100%; max-width: 26rem; gap: .5rem; }
+    #typeForm.show { display: flex; }
+    #typeForm input {
+      flex: 1; font-size: 1rem; padding: .7rem .9rem; border-radius: 999px;
+      border: 1px solid #ccc; background: #fff;
+    }
+    #typeForm button, .pill {
+      font-size: 1rem; padding: .7rem 1.1rem; border-radius: 999px; border: 0;
+      background: var(--btn); color: #fff; cursor: pointer;
+    }
+    .hint { font-size: .85rem; opacity: .7; text-align: center; max-width: 24rem; margin: 0; }
+    .hint:empty { display: none; }
     .meta {
       position: fixed;
       bottom: 1rem;
@@ -67,12 +103,38 @@
       text-align: center;
       font-size: .85rem;
       opacity: .55;
+      pointer-events: none;
     }
+    #gear {
+      position: fixed; top: .8rem; right: .8rem; width: 44px; height: 44px;
+      border-radius: 50%; border: 0; background: transparent; cursor: pointer;
+      opacity: .55; color: var(--text);
+    }
+    #gear:hover { opacity: .9; }
+    #gear svg { width: 24px; height: 24px; }
+    dialog {
+      border: 0; border-radius: 16px; padding: 1.25rem; width: min(92vw, 26rem);
+      box-shadow: 0 20px 50px rgba(0,0,0,.25); color: var(--text);
+    }
+    dialog::backdrop { background: rgba(0,0,0,.35); }
+    dialog h2 { margin: 0 0 .75rem; font-size: 1.2rem; }
+    dialog label { display: block; font-size: .9rem; font-weight: 600; margin: .8rem 0 .3rem; }
+    dialog select, dialog input[type=text], dialog input[type=password] {
+      width: 100%; font-size: 1rem; padding: .55rem .6rem; border-radius: 10px; border: 1px solid #ccc; background: #fff;
+    }
+    dialog .row { display: flex; gap: .5rem; align-items: center; }
+    dialog .small { font-size: .8rem; opacity: .7; margin: .3rem 0 0; }
+    dialog .actions { display: flex; gap: .5rem; justify-content: flex-end; margin-top: 1.1rem; flex-wrap: wrap; }
+    .pill.ghost { background: #e8e8e8; color: var(--text); }
+    .check { display: flex; gap: .5rem; align-items: center; font-weight: 400 !important; }
   </style>
 </head>
 <body>
+  <button id="gear" type="button" aria-label="Settings" title="Settings">
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19.4 13a7.6 7.6 0 0 0 0-2l2-1.6a.5.5 0 0 0 .1-.6l-1.9-3.3a.5.5 0 0 0-.6-.2l-2.4 1a7.3 7.3 0 0 0-1.7-1l-.4-2.6a.5.5 0 0 0-.5-.4h-3.8a.5.5 0 0 0-.5.4l-.4 2.6a7.3 7.3 0 0 0-1.7 1l-2.4-1a.5.5 0 0 0-.6.2L2.5 8.8a.5.5 0 0 0 .1.6l2 1.6a7.6 7.6 0 0 0 0 2l-2 1.6a.5.5 0 0 0-.1.6l1.9 3.3c.1.2.4.3.6.2l2.4-1c.5.4 1.1.7 1.7 1l.4 2.6c0 .2.3.4.5.4h3.8c.2 0 .5-.2.5-.4l.4-2.6c.6-.3 1.2-.6 1.7-1l2.4 1c.2.1.5 0 .6-.2l1.9-3.3a.5.5 0 0 0-.1-.6L19.4 13ZM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7Z"/></svg>
+  </button>
   <main>
-    <button id="talk" type="button" aria-pressed="false" aria-label="Live talk">
+    <button id="talk" type="button" aria-pressed="false" aria-label="Live talk" data-state="idle">
       <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
         <path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3Z" fill="currentColor"/>
         <path d="M19 11a1 1 0 1 0-2 0 5 5 0 0 1-10 0 1 1 0 1 0-2 0 7 7 0 0 0 6 6.93V21H9a1 1 0 1 0 0 2h6a1 1 0 1 0 0-2h-2v-3.07A7 7 0 0 0 19 11Z" fill="currentColor"/>
@@ -80,17 +142,56 @@
     </button>
     <p class="label" id="label">Live talk</p>
     <p class="status" id="status">Tap to open. Tap again to close.</p>
+    <p class="hint" id="hint"></p>
+    <div id="captions" aria-live="polite"></div>
+    <form id="typeForm" autocomplete="off">
+      <input id="typeInput" type="text" placeholder="Type what you want to say…" aria-label="Type your message" />
+      <button type="submit">Send</button>
+    </form>
   </main>
   <p class="meta">Call AI · no login · 5 min/day (demo timer)</p>
-  <script>
-    const btn = document.getElementById('talk');
-    const label = document.getElementById('label');
-    const status = document.getElementById('status');
-    const DAY_MS = 24 * 60 * 60 * 1000;
-    const LIMIT_MS = 5 * 60 * 1000;
-    let open = false;
-    let tick = null;
 
+  <dialog id="settings">
+    <form method="dialog" id="settingsForm">
+      <h2>Settings</h2>
+      <label for="voiceSel">Voice</label>
+      <div class="row">
+        <select id="voiceSel"></select>
+        <button type="button" class="pill ghost" id="testVoice">Test</button>
+      </div>
+      <label for="rate">Speaking speed <span id="rateVal"></span></label>
+      <input id="rate" type="range" min="0.7" max="1.4" step="0.05" style="width:100%" />
+      <label class="check"><input type="checkbox" id="bargeIn" /> Let me interrupt while it talks</label>
+      <label for="provider">AI brain</label>
+      <select id="provider">
+        <option value="free">Free AI (no key needed)</option>
+        <option value="xai">xAI Grok (your own key)</option>
+        <option value="gemini">Google Gemini (your own key)</option>
+      </select>
+      <div id="keyBox">
+        <label for="apiKey" id="keyLabel">API key</label>
+        <input id="apiKey" type="password" placeholder="Paste your key" autocomplete="off" spellcheck="false" />
+        <label for="model">Model</label>
+        <input id="model" type="text" spellcheck="false" />
+        <p class="small">Your key is saved only in this browser (localStorage) and sent only to that AI company. It never goes to us.</p>
+      </div>
+      <label class="check"><input type="checkbox" id="alwaysType" /> Always show the text box</label>
+      <div class="actions">
+        <button type="button" class="pill ghost" id="clearKeys">Forget my keys</button>
+        <button type="submit" class="pill" id="saveSettings">Done</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script>
+  (function () {
+    'use strict';
+    const $ = (id) => document.getElementById(id);
+    const btn = $('talk'), label = $('label'), status = $('status'), hint = $('hint');
+    const captions = $('captions'), typeForm = $('typeForm'), typeInput = $('typeInput');
+
+    // ---------- Daily 5-minute timer (unchanged behaviour) ----------
+    const LIMIT_MS = 5 * 60 * 1000;
     function dayKey() {
       const d = new Date();
       return d.getFullYear() + '-' + (d.getMonth()+1) + '-' + d.getDate();
@@ -102,54 +203,461 @@
         const data = JSON.parse(raw);
         if (data.day !== dayKey()) return { day: dayKey(), ms: 0 };
         return data;
-      } catch { return { day: dayKey(), ms: 0 }; }
+      } catch (e) { return { day: dayKey(), ms: 0 }; }
     }
     function setUsed(ms) {
-      localStorage.setItem('callai-used', JSON.stringify({ day: dayKey(), ms }));
+      try { localStorage.setItem('callai-used', JSON.stringify({ day: dayKey(), ms })); } catch (e) {}
     }
-    function remaining() {
-      return Math.max(0, LIMIT_MS - getUsed().ms);
-    }
+    function remaining() { return Math.max(0, LIMIT_MS - getUsed().ms); }
     function fmt(ms) {
       const s = Math.ceil(ms / 1000);
-      const m = Math.floor(s / 60);
-      const r = s % 60;
-      return m + ':' + String(r).padStart(2, '0');
+      return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
     }
+
+    // ---------- Settings (localStorage only) ----------
+    const DEFAULT_MODELS = { xai: 'grok-4.7', gemini: 'gemini-flash-latest' };
+    const S = {
+      get(k, d) { try { const v = localStorage.getItem('callai-' + k); return v === null ? d : v; } catch (e) { return d; } },
+      set(k, v) { try { localStorage.setItem('callai-' + k, v); } catch (e) {} },
+      del(k) { try { localStorage.removeItem('callai-' + k); } catch (e) {} }
+    };
+    const settings = {
+      get provider() { return S.get('provider', 'free'); },
+      get voice() { return S.get('voice', ''); },
+      get rate() { return parseFloat(S.get('rate', '1')) || 1; },
+      get bargeIn() { return S.get('bargein', '1') === '1'; },
+      get alwaysType() { return S.get('alwaystype', '0') === '1'; },
+      key(p) { return S.get('key-' + p, ''); },
+      model(p) { return S.get('model-' + p, '') || DEFAULT_MODELS[p] || ''; }
+    };
+
+    // ---------- Voice output (speechSynthesis) ----------
+    const synth = window.speechSynthesis || null;
+    let voices = [];
+    function scoreVoice(v) {
+      const n = (v.name || '') + ' ' + (v.voiceURI || '');
+      let s = 0;
+      if (/^en[-_]US/i.test(v.lang)) s += 30; else if (/^en/i.test(v.lang)) s += 20; else return -1000;
+      if (/natural|neural|online/i.test(n)) s += 50;
+      if (/google/i.test(n)) s += 40;
+      if (/premium|enhanced/i.test(n)) s += 35;
+      if (/samantha|ava|allison|aria|jenny|guy|zira|karen|daniel|serena|siri/i.test(n)) s += 20;
+      if (/compact|espeak|novelty|whisper|bad news|bells|bubbles|cellos|zarvox|trinoids|albert|jester|organ|superstar|boing|deranged|hysterical|wobble/i.test(n)) s -= 60;
+      if (v.localService === false) s += 5;
+      return s;
+    }
+    function englishVoices() {
+      return voices.filter(v => /^en/i.test(v.lang || '')).sort((a, b) => scoreVoice(b) - scoreVoice(a));
+    }
+    function pickVoice() {
+      const list = englishVoices();
+      const want = settings.voice;
+      if (want) { const v = voices.find(v => v.voiceURI === want || v.name === want); if (v) return v; }
+      return list[0] || null;
+    }
+    function loadVoices() {
+      if (!synth) return;
+      voices = synth.getVoices() || [];
+      fillVoiceSelect();
+    }
+    if (synth) {
+      loadVoices();
+      if ('onvoiceschanged' in synth) synth.onvoiceschanged = loadVoices;
+      else if (synth.addEventListener) synth.addEventListener('voiceschanged', loadVoices);
+    }
+    function splitSentences(text) {
+      const parts = text.match(/[^.!?]+[.!?]+["')\]]*\s*|[^.!?]+$/g) || [text];
+      return parts.map(s => s.trim()).filter(Boolean);
+    }
+    let speakingText = '';
+    function speak(text, onDone) {
+      if (!synth || !window.SpeechSynthesisUtterance) { onDone && onDone(); return; }
+      synth.cancel();
+      speakingText = text;
+      const chunks = splitSentences(text);
+      const voice = pickVoice();
+      let i = 0, finished = false;
+      const done = () => { if (finished) return; finished = true; speakingText = ''; onDone && onDone(); };
+      speak.cancelCurrent = () => { finished = true; speakingText = ''; synth.cancel(); };
+      const next = () => {
+        if (finished) return;
+        if (i >= chunks.length) return done();
+        const u = new SpeechSynthesisUtterance(chunks[i++]);
+        if (voice) { u.voice = voice; u.lang = voice.lang; } else u.lang = 'en-US';
+        u.rate = settings.rate;
+        u.onend = next;
+        u.onerror = next;
+        synth.speak(u);
+      };
+      next();
+    }
+    function stopSpeaking() { if (speak.cancelCurrent) speak.cancelCurrent(); else if (synth) synth.cancel(); }
+
+    // ---------- Listening (Web Speech API) ----------
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition || null;
+    let rec = null, recActive = false, micBlocked = false;
+    function setupRec() {
+      if (!SR) return null;
+      const r = new SR();
+      r.lang = 'en-US';
+      r.continuous = false;
+      r.interimResults = true;
+      r.maxAlternatives = 1;
+      r.onstart = () => { recActive = true; };
+      r.onresult = onRecResult;
+      r.onerror = (e) => {
+        const err = e && e.error;
+        if (err === 'not-allowed' || err === 'service-not-allowed') {
+          micBlocked = true;
+          showType(true);
+          setHint('Microphone is blocked. Allow the mic for this site, or type below.');
+        } else if (err === 'network') {
+          setHint('Speech recognition needs an internet connection. You can type below.');
+          showType(true);
+        }
+      };
+      r.onend = () => {
+        recActive = false;
+        clearInterim();
+        if (open && !micBlocked && (state === 'listening' || (state === 'speaking' && settings.bargeIn))) {
+          setTimeout(ensureListening, 150);
+        }
+      };
+      return r;
+    }
+    function ensureListening() {
+      if (!open || !SR || micBlocked || recActive) return;
+      if (!rec) rec = setupRec();
+      try { rec.start(); recActive = true; } catch (e) { /* already started */ }
+    }
+    function stopListening() {
+      if (rec && recActive) { try { rec.abort(); } catch (e) {} }
+      recActive = false;
+    }
+    function norm(s) { return (s || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim(); }
+    function isEcho(heard) {
+      const h = norm(heard);
+      if (!h) return true;
+      const said = norm(speakingText || lastReply);
+      if (said && said.indexOf(h) !== -1) return true;
+      // Mostly overlapping words with what we are saying = our own voice leaking into the mic
+      const sw = new Set(said.split(' '));
+      const hw = h.split(' ');
+      const overlap = hw.filter(w => sw.has(w)).length / hw.length;
+      return hw.length >= 2 && overlap >= 0.8;
+    }
+    function onRecResult(e) {
+      let finalText = '', interim = '';
+      for (let i = e.resultIndex || 0; i < e.results.length; i++) {
+        const r = e.results[i];
+        if (r.isFinal) finalText += r[0].transcript; else interim += r[0].transcript;
+      }
+      const heard = (finalText || interim).trim();
+      if (!heard) return;
+      if (state === 'thinking') return;
+      if (state === 'speaking') {
+        if (isEcho(heard)) return;
+        // Barge-in: user started talking, stop our voice.
+        stopSpeaking();
+        setState('listening');
+      }
+      if (finalText.trim()) { clearInterim(); userSaid(finalText.trim()); }
+      else showInterim(interim.trim());
+    }
+
+    // ---------- Conversation + AI ----------
+    const SYSTEM_PROMPT = "You are Call AI, a warm, friendly voice assistant on a live phone-style call. " +
+      "Talk like a helpful person on the phone. Keep every answer short: one to three spoken sentences. " +
+      "Use plain words only: no markdown, no lists, no emojis, no links, no special symbols. " +
+      "If you didn't catch something, ask a quick follow-up question.";
+    const MAX_TURNS = 10;
+    let history = [];
+    let lastReply = '';
+    let turnId = 0;
+
+    function cleanReply(t) {
+      if (!t) return '';
+      t = String(t);
+      // Drop sponsor/ad footers some free endpoints may append.
+      t = t.split(/\n\s*(?:---+|\*\*Sponsor|🌸)/)[0];
+      t = t.split('\n').filter(l => !/pollinations\.ai/i.test(l)).join('\n');
+      t = t.replace(/```[\s\S]*?```/g, ' ')
+           .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+           .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+           .replace(/https?:\/\/\S+/g, '')
+           .replace(/[*_`#>~|]+/g, '')
+           .replace(/^\s*[-•]\s+/gm, '')
+           .replace(/^\s*\d+\.\s+/gm, '')
+           .replace(/\s+/g, ' ')
+           .trim();
+      return t;
+    }
+
+    async function fetchJSON(url, opts, ms) {
+      const ctl = new AbortController();
+      const to = setTimeout(() => ctl.abort(), ms || 30000);
+      try {
+        const r = await fetch(url, Object.assign({}, opts, { signal: ctl.signal }));
+        if (!r.ok) { const err = new Error('HTTP ' + r.status); err.status = r.status; throw err; }
+        return await r.json();
+      } finally { clearTimeout(to); }
+    }
+
+    async function askFree(msgs) {
+      // 1st try: Pollinations OpenAI-compatible POST. 2nd try: Pollinations simple GET.
+      const body = { model: 'openai', messages: msgs, private: true, referrer: 'call-ai' };
+      try {
+        const d = await fetchJSON('https://text.pollinations.ai/openai', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+        }, 30000);
+        const c = d && d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content;
+        if (c) return c;
+      } catch (e) { /* fall through to GET */ }
+      await new Promise(r => setTimeout(r, 1500));
+      const convo = msgs.filter(m => m.role !== 'system').slice(-6)
+        .map(m => (m.role === 'assistant' ? 'Assistant: ' : 'User: ') + m.content).join('\n').slice(-1500) + '\nAssistant:';
+      const url = 'https://text.pollinations.ai/' + encodeURIComponent(convo) +
+        '?model=openai&private=true&referrer=call-ai&system=' + encodeURIComponent(SYSTEM_PROMPT);
+      const ctl = new AbortController();
+      const to = setTimeout(() => ctl.abort(), 30000);
+      try {
+        const r = await fetch(url, { signal: ctl.signal });
+        if (!r.ok) { const err = new Error('HTTP ' + r.status); err.status = r.status; throw err; }
+        const t = (await r.text()).trim();
+        if (!t || t.charAt(0) === '{') throw new Error('bad reply');
+        return t;
+      } finally { clearTimeout(to); }
+    }
+    async function askXai(msgs) {
+      const key = settings.key('xai');
+      if (!key) throw Object.assign(new Error('nokey'), { nokey: true });
+      const d = await fetchJSON('https://api.x.ai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
+        body: JSON.stringify({ model: settings.model('xai'), messages: msgs, max_tokens: 300 })
+      }, 45000);
+      return d.choices[0].message.content;
+    }
+    async function askGemini(msgs) {
+      const key = settings.key('gemini');
+      if (!key) throw Object.assign(new Error('nokey'), { nokey: true });
+      const contents = msgs.filter(m => m.role !== 'system').map(m => ({
+        role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }]
+      }));
+      const url = 'https://generativelanguage.googleapis.com/v1beta/models/' +
+        encodeURIComponent(settings.model('gemini')) + ':generateContent';
+      const d = await fetchJSON(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+        body: JSON.stringify({ systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] }, contents })
+      }, 45000);
+      const parts = d && d.candidates && d.candidates[0] && d.candidates[0].content && d.candidates[0].content.parts;
+      return (parts || []).map(p => p.text || '').join(' ');
+    }
+    function askAI(msgs) {
+      const p = settings.provider;
+      if (p === 'xai') return askXai(msgs);
+      if (p === 'gemini') return askGemini(msgs);
+      return askFree(msgs);
+    }
+
+    async function userSaid(text) {
+      if (!open || !text) return;
+      const my = ++turnId;
+      stopListening();
+      addCaption('you', text);
+      history.push({ role: 'user', content: text });
+      history = history.slice(-MAX_TURNS * 2);
+      setState('thinking');
+      let reply;
+      try {
+        const msgs = [{ role: 'system', content: SYSTEM_PROMPT }].concat(history);
+        reply = cleanReply(await askAI(msgs));
+        if (!reply) throw new Error('empty');
+      } catch (e) {
+        if (my !== turnId || !open) return;
+        history.pop();
+        let msg;
+        if (e && e.nokey) msg = 'Add your API key in Settings (gear, top right), or switch back to the Free AI.';
+        else if (settings.provider === 'free') msg = 'The free AI is busy right now. Please try again in a moment, or add your own xAI or Gemini key in Settings.';
+        else if (e && (e.status === 401 || e.status === 403 || e.status === 400)) msg = 'Your API key or model was not accepted. Check it in Settings.';
+        else msg = 'I couldn\u2019t reach the AI just now. Please try again in a moment.';
+        addCaption('err', msg);
+        setState('listening');
+        ensureListening();
+        return;
+      }
+      if (my !== turnId || !open) return;
+      history.push({ role: 'assistant', content: reply });
+      history = history.slice(-MAX_TURNS * 2);
+      lastReply = reply;
+      addCaption('ai', reply);
+      setState('speaking');
+      if (settings.bargeIn) setTimeout(() => { if (state === 'speaking') ensureListening(); }, 350);
+      speak(reply, () => {
+        if (my !== turnId || !open) return;
+        if (state === 'speaking') setState('listening');
+        ensureListening();
+      });
+    }
+
+    // ---------- UI helpers ----------
+    let state = 'idle', open = false, tick = null, interimEl = null;
+    const LABELS = { idle: 'Live talk', listening: 'Listening\u2026', thinking: 'Thinking\u2026', speaking: 'Speaking\u2026' };
+    function setState(s) {
+      state = s;
+      btn.dataset.state = s;
+      label.textContent = open ? (s === 'listening' && !SR_USABLE() ? 'Your turn' : LABELS[s]) : 'Live talk';
+    }
+    function SR_USABLE() { return !!SR && !micBlocked; }
+    function setHint(t) { hint.textContent = t || ''; }
+    function addCaption(kind, text) {
+      const el = document.createElement('div');
+      el.className = 'cap ' + kind;
+      el.textContent = (kind === 'you' ? 'You: ' : kind === 'ai' ? 'Call AI: ' : '') + text;
+      if (interimEl && interimEl.parentNode) captions.insertBefore(el, interimEl); else captions.appendChild(el);
+      while (captions.children.length > 6) captions.removeChild(captions.firstChild);
+      el.scrollIntoView && el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+    function showInterim(text) {
+      if (!interimEl) { interimEl = document.createElement('div'); interimEl.className = 'cap you interim'; }
+      interimEl.textContent = 'You: ' + text + '\u2026';
+      if (!interimEl.parentNode) captions.appendChild(interimEl);
+    }
+    function clearInterim() { if (interimEl && interimEl.parentNode) interimEl.parentNode.removeChild(interimEl); }
+    function showType(on) {
+      typeForm.classList.toggle('show', !!on);
+    }
+    function statusLine(left) { status.textContent = 'Open \u00b7 ' + fmt(left) + ' left today'; }
+
+    // ---------- Open / close ----------
     function closeTalk(reason) {
       open = false;
-      btn.setAttribute('aria-pressed', 'false');
-      label.textContent = 'Live talk';
+      turnId++;
       if (tick) { clearInterval(tick); tick = null; }
+      stopListening();
+      stopSpeaking();
+      clearInterim();
+      btn.setAttribute('aria-pressed', 'false');
+      setState('idle');
       status.textContent = reason || 'Closed. Tap to open.';
+      showType(false);
     }
     function openTalk() {
       const left = remaining();
       if (left <= 0) {
-        status.textContent = 'Today’s 5 minutes are used. Come back tomorrow.';
+        status.textContent = 'Today\u2019s 5 minutes are used. Come back tomorrow.';
         return;
       }
       open = true;
       btn.setAttribute('aria-pressed', 'true');
-      label.textContent = 'Listening…';
-      status.textContent = 'Open · ' + fmt(left) + ' left today (AI hookup next).';
+      captions.textContent = '';
+      interimEl = null;
+      history = []; lastReply = '';
+      // Unlock speech on iPhone: speechSynthesis must start inside the tap.
+      if (synth && window.SpeechSynthesisUtterance) {
+        try { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; synth.speak(u); } catch (e) {}
+      }
+      if (!SR) {
+        setHint('Voice input isn\u2019t supported in this browser. For hands-free talk, use Chrome or Safari. You can type below.');
+      } else setHint('');
+      showType(!SR || micBlocked || settings.alwaysType);
+      setState('listening');
+      statusLine(left);
       const started = Date.now();
-      let base = getUsed().ms;
+      const base = getUsed().ms;
       tick = setInterval(() => {
         const used = base + (Date.now() - started);
         setUsed(used);
         const leftNow = Math.max(0, LIMIT_MS - used);
-        if (leftNow <= 0) {
-          closeTalk('Time’s up for today. Come back tomorrow.');
-          return;
-        }
-        status.textContent = 'Open · ' + fmt(leftNow) + ' left today (AI hookup next).';
+        if (leftNow <= 0) { closeTalk('Time\u2019s up for today. Come back tomorrow.'); return; }
+        statusLine(leftNow);
       }, 500);
+      ensureListening();
+      if (!SR || micBlocked) setTimeout(() => typeInput.focus(), 50);
     }
-    btn.addEventListener('click', () => {
-      if (open) closeTalk('Closed. Tap to open.');
-      else openTalk();
+    btn.addEventListener('click', () => { if (open) closeTalk('Closed. Tap to open.'); else openTalk(); });
+    typeForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const t = typeInput.value.trim();
+      if (!t) return;
+      if (!open) { openTalk(); if (!open) return; }
+      typeInput.value = '';
+      if (state === 'speaking') stopSpeaking();
+      if (state === 'thinking') return;
+      userSaid(t);
     });
+
+    // ---------- Settings dialog ----------
+    const dlg = $('settings'), voiceSel = $('voiceSel'), rate = $('rate'), rateVal = $('rateVal');
+    const provider = $('provider'), apiKey = $('apiKey'), model = $('model'), keyBox = $('keyBox'), keyLabel = $('keyLabel');
+    const bargeIn = $('bargeIn'), alwaysType = $('alwaysType');
+    function fillVoiceSelect() {
+      const voiceSel = $('voiceSel');
+      const list = englishVoices();
+      const cur = pickVoice();
+      voiceSel.textContent = '';
+      if (!list.length) {
+        const o = document.createElement('option'); o.value = ''; o.textContent = synth ? 'Default voice' : 'Voice not supported in this browser';
+        voiceSel.appendChild(o); return;
+      }
+      list.forEach(v => {
+        const o = document.createElement('option');
+        o.value = v.voiceURI || v.name;
+        o.textContent = v.name + ' (' + v.lang + ')';
+        if (cur && (cur.voiceURI || cur.name) === o.value) o.selected = true;
+        voiceSel.appendChild(o);
+      });
+    }
+    function syncKeyBox() {
+      const p = provider.value;
+      keyBox.style.display = p === 'free' ? 'none' : '';
+      keyLabel.textContent = p === 'xai' ? 'xAI API key (console.x.ai)' : 'Gemini API key (aistudio.google.com)';
+      apiKey.value = p === 'free' ? '' : settings.key(p);
+      model.value = p === 'free' ? '' : settings.model(p);
+      model.placeholder = DEFAULT_MODELS[p] || '';
+    }
+    function openSettings() {
+      fillVoiceSelect();
+      rate.value = settings.rate; rateVal.textContent = '(' + settings.rate.toFixed(2) + 'x)';
+      provider.value = settings.provider;
+      bargeIn.checked = settings.bargeIn;
+      alwaysType.checked = settings.alwaysType;
+      syncKeyBox();
+      if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open', '');
+    }
+    function saveSettings() {
+      if (voiceSel.value) S.set('voice', voiceSel.value);
+      S.set('rate', String(rate.value));
+      S.set('provider', provider.value);
+      S.set('bargein', bargeIn.checked ? '1' : '0');
+      S.set('alwaystype', alwaysType.checked ? '1' : '0');
+      const p = provider.value;
+      if (p !== 'free') {
+        const k = apiKey.value.trim();
+        if (k) S.set('key-' + p, k); else S.del('key-' + p);
+        const m = model.value.trim();
+        if (m && m !== DEFAULT_MODELS[p]) S.set('model-' + p, m); else S.del('model-' + p);
+      }
+      if (open) showType(!SR || micBlocked || settings.alwaysType);
+    }
+    $('gear').addEventListener('click', openSettings);
+    provider.addEventListener('change', syncKeyBox);
+    rate.addEventListener('input', () => { rateVal.textContent = '(' + parseFloat(rate.value).toFixed(2) + 'x)'; });
+    $('testVoice').addEventListener('click', () => {
+      if (voiceSel.value) S.set('voice', voiceSel.value);
+      S.set('rate', String(rate.value));
+      speak('Hi, this is Call AI. How can I help you today?');
+    });
+    $('clearKeys').addEventListener('click', () => {
+      S.del('key-xai'); S.del('key-gemini'); S.del('model-xai'); S.del('model-gemini');
+      S.set('provider', 'free'); provider.value = 'free'; syncKeyBox();
+    });
+    $('settingsForm').addEventListener('submit', saveSettings);
+
+    // Test/debug hook (no secrets exposed)
+    window.CallAI = { get state() { return state; }, get open() { return open; }, get history() { return history.slice(); }, version: '2.0-voice' };
+  })();
   </script>
 </body>
 </html>

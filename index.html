@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="callai-version" content="2.0-voice" />
+  <meta name="callai-version" content="3.0-camera" />
   <title>Call AI</title>
   <style>
     :root {
@@ -96,10 +96,8 @@
     .hint { font-size: .85rem; opacity: .7; text-align: center; max-width: 24rem; margin: 0; }
     .hint:empty { display: none; }
     .meta {
-      position: fixed;
-      bottom: 1rem;
-      left: 0;
-      right: 0;
+      margin: 0;
+      padding: 0 1rem 1rem;
       text-align: center;
       font-size: .85rem;
       opacity: .55;
@@ -127,6 +125,42 @@
     dialog .actions { display: flex; gap: .5rem; justify-content: flex-end; margin-top: 1.1rem; flex-wrap: wrap; }
     .pill.ghost { background: #e8e8e8; color: var(--text); }
     .check { display: flex; gap: .5rem; align-items: center; font-weight: 400 !important; }
+    [hidden] { display: none !important; }
+    /* ---------- Camera ---------- */
+    button#cam {
+      width: min(86vw, 22rem); min-height: 88px; border: 0; border-radius: 24px;
+      background: #0f9d58; color: #fff; font-size: 1.6rem; font-weight: 800; cursor: pointer;
+      display: flex; align-items: center; justify-content: center; gap: .7rem;
+      box-shadow: 0 8px 22px rgba(0,0,0,.16); -webkit-tap-highlight-color: transparent;
+    }
+    button#cam[aria-pressed="true"] { background: #b3261e; }
+    button#cam svg { width: 40px; height: 40px; }
+    #camBox { width: 100%; max-width: 34rem; display: flex; flex-direction: column; gap: .7rem; align-items: stretch; }
+    #camStage {
+      position: relative; width: 100%; aspect-ratio: 3 / 4; max-height: 64vh; background: #000;
+      border-radius: 20px; overflow: hidden; border: 0; padding: 0; cursor: pointer; display: block;
+      -webkit-tap-highlight-color: transparent;
+    }
+    #camStage video, #camStage img { width: 100%; height: 100%; display: block; object-fit: cover; }
+    #camStage img { object-fit: contain; background: #000; }
+    #camTip {
+      position: absolute; left: 0; right: 0; bottom: 0; padding: 1rem .8rem; color: #fff; text-align: center;
+      font-size: 1.3rem; font-weight: 800; background: linear-gradient(transparent, rgba(0,0,0,.8));
+    }
+    #verdict { font-size: 1.7rem; font-weight: 900; text-align: center; padding: .6rem; border-radius: 16px; margin: 0; }
+    #verdict.junk { background: #fdecea; color: #8a1c13; }
+    #verdict.real { background: #e6f4ea; color: #0d652d; }
+    #verdict.other { background: #e8f0fe; color: #174ea6; }
+    #verdict.scam { background: #8a1c13; color: #fff; }
+    #choices { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; width: 100%; max-width: 26rem; }
+    #choices button {
+      min-height: 128px; border: 0; border-radius: 24px; color: #fff; cursor: pointer; font-size: 1.15rem; font-weight: 700;
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .3rem;
+      box-shadow: 0 6px 18px rgba(0,0,0,.15); -webkit-tap-highlight-color: transparent;
+    }
+    #choices .num { font-size: 3.4rem; line-height: 1; font-weight: 900; }
+    #c1 { background: #1a73e8; }
+    #c2 { background: #5f6368; }
   </style>
 </head>
 <body>
@@ -143,6 +177,23 @@
     <p class="label" id="label">Live talk</p>
     <p class="status" id="status">Tap to open. Tap again to close.</p>
     <p class="hint" id="hint"></p>
+    <button id="cam" type="button" aria-pressed="false" aria-label="Camera">
+      <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9 3 7.2 5H4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-3.2L15 3H9Zm3 5a5 5 0 1 1 0 10 5 5 0 0 1 0-10Zm0 2a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z"/></svg>
+      <span id="camLabel">Camera</span>
+    </button>
+    <div id="camBox" hidden>
+      <button id="camStage" type="button" aria-label="Tap to read what the camera sees">
+        <video id="camVideo" autoplay playsinline muted></video>
+        <img id="camShot" alt="Your photo" hidden />
+        <span id="camTip">Starting camera…</span>
+      </button>
+      <p id="verdict" hidden></p>
+      <input id="filePick" type="file" accept="image/*" capture="environment" hidden />
+    </div>
+    <div id="choices" hidden>
+      <button id="c1" type="button"><span class="num">1</span><span id="c1Text">Yes</span></button>
+      <button id="c2" type="button"><span class="num">2</span><span id="c2Text">No</span></button>
+    </div>
     <div id="captions" aria-live="polite"></div>
     <form id="typeForm" autocomplete="off">
       <input id="typeInput" type="text" placeholder="Type what you want to say…" aria-label="Type your message" />
@@ -266,7 +317,8 @@
       else if (synth.addEventListener) synth.addEventListener('voiceschanged', loadVoices);
     }
     function splitSentences(text) {
-      const parts = text.match(/[^.!?]+[.!?]+["')\]]*\s*|[^.!?]+$/g) || [text];
+      // Split only where . ! ? is followed by a space, so "$121.48" stays whole.
+      const parts = String(text).replace(/([.!?]+["')\]]*)\s+/g, '$1\u0001').split('\u0001');
       return parts.map(s => s.trim()).filter(Boolean);
     }
     let speakingText = '';
@@ -369,7 +421,8 @@
     const SYSTEM_PROMPT = "You are Call AI, a warm, friendly voice assistant on a live phone-style call. " +
       "Talk like a helpful person on the phone. Keep every answer short: one to three spoken sentences. " +
       "Use plain words only: no markdown, no lists, no emojis, no links, no special symbols. " +
-      "If you didn't catch something, ask a quick follow-up question.";
+      "If you didn't catch something, ask a quick follow-up question. " +
+      "When you ask the caller a yes or no question, end it with: Say one for yes, or two for no.";
     const MAX_TURNS = 10;
     let history = [];
     let lastReply = '';
@@ -404,6 +457,8 @@
     }
 
     async function askFree(msgs) {
+      // The free endpoint is text-only: flatten any photo parts to their text.
+      msgs = msgs.map(m => Array.isArray(m.content) ? { role: m.role, content: m.content.filter(p => p.type === 'text').map(p => p.text).join(' ') } : m);
       // 1st try: Pollinations OpenAI-compatible POST. 2nd try: Pollinations simple GET.
       const body = { model: 'openai', messages: msgs, private: true, referrer: 'call-ai' };
       try {
@@ -416,8 +471,9 @@
       await new Promise(r => setTimeout(r, 1500));
       const convo = msgs.filter(m => m.role !== 'system').slice(-6)
         .map(m => (m.role === 'assistant' ? 'Assistant: ' : 'User: ') + m.content).join('\n').slice(-1500) + '\nAssistant:';
+      const sys = (msgs[0] && msgs[0].role === 'system') ? String(msgs[0].content).slice(0, 2500) : SYSTEM_PROMPT;
       const url = 'https://text.pollinations.ai/' + encodeURIComponent(convo) +
-        '?model=openai&private=true&referrer=call-ai&system=' + encodeURIComponent(SYSTEM_PROMPT);
+        '?model=openai&private=true&referrer=call-ai&system=' + encodeURIComponent(sys);
       const ctl = new AbortController();
       const to = setTimeout(() => ctl.abort(), 30000);
       try {
@@ -428,42 +484,58 @@
         return t;
       } finally { clearTimeout(to); }
     }
-    async function askXai(msgs) {
+    async function askXai(msgs, maxTokens) {
       const key = settings.key('xai');
       if (!key) throw Object.assign(new Error('nokey'), { nokey: true });
       const d = await fetchJSON('https://api.x.ai/v1/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
-        body: JSON.stringify({ model: settings.model('xai'), messages: msgs, max_tokens: 300 })
+        body: JSON.stringify({ model: settings.model('xai'), messages: msgs, max_tokens: maxTokens || 300 })
       }, 45000);
       return d.choices[0].message.content;
     }
     async function askGemini(msgs) {
       const key = settings.key('gemini');
       if (!key) throw Object.assign(new Error('nokey'), { nokey: true });
+      const toParts = (c) => Array.isArray(c) ? c.map(p => {
+        if (p.type === 'image_url') {
+          const u = (p.image_url && p.image_url.url) || '';
+          const mm = u.match(/^data:([^;]+);base64,(.*)$/);
+          return mm ? { inline_data: { mime_type: mm[1], data: mm[2] } } : { text: '' };
+        }
+        return { text: p.text || '' };
+      }) : [{ text: c }];
       const contents = msgs.filter(m => m.role !== 'system').map(m => ({
-        role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }]
+        role: m.role === 'assistant' ? 'model' : 'user', parts: toParts(m.content)
       }));
+      const sysMsg = msgs.find(m => m.role === 'system');
       const url = 'https://generativelanguage.googleapis.com/v1beta/models/' +
         encodeURIComponent(settings.model('gemini')) + ':generateContent';
       const d = await fetchJSON(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-        body: JSON.stringify({ systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] }, contents })
+        body: JSON.stringify({ systemInstruction: { parts: [{ text: sysMsg ? sysMsg.content : SYSTEM_PROMPT }] }, contents })
       }, 45000);
       const parts = d && d.candidates && d.candidates[0] && d.candidates[0].content && d.candidates[0].content.parts;
       return (parts || []).map(p => p.text || '').join(' ');
     }
-    function askAI(msgs) {
+    function askAI(msgs, maxTokens) {
       const p = settings.provider;
-      if (p === 'xai') return askXai(msgs);
+      if (p === 'xai') return askXai(msgs, maxTokens);
       if (p === 'gemini') return askGemini(msgs);
       return askFree(msgs);
     }
+    function visionReady() { const p = settings.provider; return p !== 'free' && !!settings.key(p); }
 
     async function userSaid(text) {
       if (!open || !text) return;
+      if (choice) {
+        const n = matchChoice(text);
+        if (n) { clearInterim(); resolveChoice(n); return; }
+        cancelChoice();
+      }
       const my = ++turnId;
+      camTurn++;
       stopListening();
       addCaption('you', text);
       history.push({ role: 'user', content: text });
@@ -471,7 +543,7 @@
       setState('thinking');
       let reply;
       try {
-        const msgs = [{ role: 'system', content: SYSTEM_PROMPT }].concat(history);
+        const msgs = buildChatMessages();
         reply = cleanReply(await askAI(msgs));
         if (!reply) throw new Error('empty');
       } catch (e) {
@@ -494,12 +566,80 @@
       addCaption('ai', reply);
       setState('speaking');
       if (settings.bargeIn) setTimeout(() => { if (state === 'speaking') ensureListening(); }, 350);
+      const yn = isYesNoQuestion(reply);
+      if (yn) askChoice({ one: 'Yes', two: 'No', onOne: () => userSaid('Yes'), onTwo: () => userSaid('No') });
       speak(reply, () => {
         if (my !== turnId || !open) return;
         if (state === 'speaking') setState('listening');
         ensureListening();
       });
     }
+    function buildChatMessages() {
+      let sys = SYSTEM_PROMPT;
+      const pre = [];
+      if (photo) {
+        sys += " The caller just showed you a photo with their camera. ";
+        if (photo.text) sys += "Words read from the photo (may have small reading mistakes): \"\"\"" + photo.text.slice(0, 3000) + "\"\"\". ";
+        sys += "You already told them: " + [photo.headline, photo.short].filter(Boolean).join(' ') +
+          " Answer their questions about it in plain words. Only read it word for word if they ask.";
+        if (photo.mode === 'vision' && visionReady()) {
+          pre.push({ role: 'user', content: [{ type: 'text', text: 'This is the photo I showed you.' }, { type: 'image_url', image_url: { url: photo.dataUrl } }] });
+          pre.push({ role: 'assistant', content: [photo.headline, photo.short].filter(Boolean).join(' ') || 'Got it.' });
+        }
+      }
+      return [{ role: 'system', content: sys }].concat(pre, history);
+    }
+    function isYesNoQuestion(t) {
+      const last = (splitSentences(t).pop() || '').trim();
+      if (!/\?\s*$/.test(last) && !/one for yes/i.test(t)) return false;
+      if (/one for yes|two for no/i.test(t)) return true;
+      return /^(do|does|did|would|should|could|can|is|are|was|were|will|want|shall|may|have|has|any|ready)\b/i.test(last) && !/\bor\b/i.test(last.replace(/or two|or no/ig, ''));
+    }
+
+    // ---------- 1 / 2 choice keys (1 = yes, 2 = no) ----------
+    const choicesEl = $('choices');
+    let choice = null;
+    function askChoice(opts) {
+      cancelChoice();
+      choice = opts;
+      $('c1Text').textContent = opts.one || 'Yes';
+      $('c2Text').textContent = opts.two || 'No';
+      $('c1').setAttribute('aria-label', '1, ' + (opts.one || 'Yes'));
+      $('c2').setAttribute('aria-label', '2, ' + (opts.two || 'No'));
+      choicesEl.hidden = false;
+    }
+    function startChoiceTimer() {
+      if (choice && choice.timeoutMs && !choice.timer) choice.timer = setTimeout(() => resolveChoice(choice.defaultChoice || 2), choice.timeoutMs);
+    }
+    function cancelChoice() {
+      if (choice && choice.timer) clearTimeout(choice.timer);
+      choice = null;
+      choicesEl.hidden = true;
+    }
+    function resolveChoice(n) {
+      const c = choice;
+      if (!c) return;
+      cancelChoice();
+      stopSpeaking();
+      (n === 1 ? c.onOne : c.onTwo)();
+    }
+    function matchChoice(t) {
+      const s = norm(t);
+      if (!s || s.split(' ').length > 6) return 0;
+      if (/^(1|one|won|number one|option one|press one|yes|yeah|yep|yup|sure|ok yes|yes please|word for word|word|read it|read it all|read all of it|all of it|the whole thing|whole thing|everything)\b/.test(s)) return 1;
+      if (/^(2|two|to|too|number two|option two|press two|no|nope|nah|no thanks|short|short version|the short version|just the short version|summary|just give me the short version)\b/.test(s)) return 2;
+      return 0;
+    }
+    $('c1').addEventListener('click', () => resolveChoice(1));
+    $('c2').addEventListener('click', () => resolveChoice(2));
+    document.addEventListener('keydown', (e) => {
+      if (!choice || e.ctrlKey || e.metaKey || e.altKey) return;
+      const tag = (document.activeElement && document.activeElement.tagName) || '';
+      const el = document.activeElement;
+      if ((tag === 'INPUT' && !(el === typeInput && !typeInput.value)) || tag === 'SELECT' || tag === 'TEXTAREA') return;
+      if (e.key === '1') { e.preventDefault(); resolveChoice(1); }
+      else if (e.key === '2') { e.preventDefault(); resolveChoice(2); }
+    });
 
     // ---------- UI helpers ----------
     let state = 'idle', open = false, tick = null, interimEl = null;
@@ -538,12 +678,19 @@
       stopListening();
       stopSpeaking();
       clearInterim();
+      cancelChoice();
       btn.setAttribute('aria-pressed', 'false');
       setState('idle');
       status.textContent = reason || 'Closed. Tap to open.';
       showType(false);
     }
-    function openTalk() {
+    function unlockSpeech() {
+      // iPhone: speechSynthesis must first start inside a tap.
+      if (synth && window.SpeechSynthesisUtterance) {
+        try { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; synth.speak(u); } catch (e) {}
+      }
+    }
+    function openTalk(keep) {
       const left = remaining();
       if (left <= 0) {
         status.textContent = 'Today\u2019s 5 minutes are used. Come back tomorrow.';
@@ -551,13 +698,13 @@
       }
       open = true;
       btn.setAttribute('aria-pressed', 'true');
-      captions.textContent = '';
-      interimEl = null;
-      history = []; lastReply = '';
-      // Unlock speech on iPhone: speechSynthesis must start inside the tap.
-      if (synth && window.SpeechSynthesisUtterance) {
-        try { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; synth.speak(u); } catch (e) {}
+      if (!keep) {
+        captions.textContent = '';
+        interimEl = null;
+        history = []; lastReply = '';
+        photo = null;
       }
+      unlockSpeech();
       if (!SR) {
         setHint('Voice input isn\u2019t supported in this browser. For hands-free talk, use Chrome or Safari. You can type below.');
       } else setHint('');
@@ -577,6 +724,294 @@
       if (!SR || micBlocked) setTimeout(() => typeInput.focus(), 50);
     }
     btn.addEventListener('click', () => { if (open) closeTalk('Closed. Tap to open.'); else openTalk(); });
+
+    // ---------- Camera: one big button, tap to open, tap again to close ----------
+    const camBtn = $('cam'), camLabel = $('camLabel'), camBox = $('camBox'), camStage = $('camStage');
+    const video = $('camVideo'), shot = $('camShot'), camTip = $('camTip'), verdict = $('verdict'), filePick = $('filePick');
+    let camStream = null, camOn = false, camUseFile = false, camBusy = false, camTurn = 0;
+    let photo = null; // { dataUrl, text, mode, kind, scam, headline, short, full }
+    const TESS_URL = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+
+    function stopStream() {
+      if (camStream) { camStream.getTracks().forEach(t => { try { t.stop(); } catch (e) {} }); camStream = null; }
+      try { video.srcObject = null; } catch (e) {}
+    }
+    function showLive() {
+      shot.hidden = true; shot.removeAttribute('src');
+      video.hidden = camUseFile;
+      verdict.hidden = true;
+      camTip.textContent = camUseFile ? 'Tap here to take a photo.' : 'Point at the letter. Tap the picture to read it.';
+    }
+    async function openCam() {
+      camOn = true; camUseFile = false;
+      camBtn.setAttribute('aria-pressed', 'true');
+      camLabel.textContent = 'Close camera';
+      camBox.hidden = false;
+      shot.hidden = true; verdict.hidden = true; video.hidden = false;
+      camTip.textContent = 'Starting camera\u2026';
+      unlockSpeech();
+      camBox.scrollIntoView && camBox.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.isSecureContext) {
+        camUseFile = true; showLive(); return;
+      }
+      try {
+        const st = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1440 } }, audio: false
+        });
+        if (!camOn) { st.getTracks().forEach(t => t.stop()); return; }
+        camStream = st;
+        video.srcObject = st;
+        try { await video.play(); } catch (e) {}
+        showLive();
+      } catch (e) {
+        camUseFile = true; showLive();
+        camTip.textContent = (e && e.name === 'NotAllowedError')
+          ? 'Camera is blocked. Allow the camera for this site, or tap here to take a photo.'
+          : 'Couldn\u2019t start the live camera. Tap here to take a photo.';
+      }
+    }
+    function closeCam() {
+      camOn = false; camTurn++; camBusy = false;
+      stopStream();
+      if (choice && choice.fromCam) cancelChoice();
+      stopSpeaking();
+      camBtn.setAttribute('aria-pressed', 'false');
+      camLabel.textContent = 'Camera';
+      camBox.hidden = true;
+      if (open && (state === 'thinking' || state === 'speaking')) { setState('listening'); ensureListening(); }
+    }
+    camBtn.addEventListener('click', () => { if (camOn) closeCam(); else openCam(); });
+
+    camStage.addEventListener('click', () => {
+      if (!camOn) return;
+      if (camBusy) return;
+      unlockSpeech();
+      if (!shot.hidden) { // a photo is showing: tap again to go back to the live picture
+        cancelChoice(); stopSpeaking(); showLive(); return;
+      }
+      if (camUseFile || !camStream || !video.videoWidth) { filePick.value = ''; filePick.click(); return; }
+      const c = document.createElement('canvas');
+      c.width = video.videoWidth; c.height = video.videoHeight;
+      c.getContext('2d').drawImage(video, 0, 0, c.width, c.height);
+      readPhoto(c);
+    });
+    filePick.addEventListener('change', () => {
+      const f = filePick.files && filePick.files[0];
+      if (!f) return;
+      const img = new Image();
+      const url = URL.createObjectURL(f);
+      img.onload = () => {
+        const c = document.createElement('canvas');
+        c.width = img.naturalWidth; c.height = img.naturalHeight;
+        c.getContext('2d').drawImage(img, 0, 0);
+        URL.revokeObjectURL(url);
+        readPhoto(c);
+      };
+      img.onerror = () => { camTip.textContent = 'That photo couldn\u2019t be opened. Try again.'; };
+      img.src = url;
+    });
+
+    function scaled(src, maxSide, gray) {
+      const k = Math.min(1, maxSide / Math.max(src.width, src.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(src.width * k); c.height = Math.round(src.height * k);
+      const g = c.getContext('2d');
+      if (gray) g.filter = 'grayscale(1) contrast(1.25)';
+      g.drawImage(src, 0, 0, c.width, c.height);
+      return c;
+    }
+    let tessLoading = null, tessWorker = null;
+    function loadTesseract() {
+      if (window.Tesseract) return Promise.resolve(window.Tesseract);
+      if (tessLoading) return tessLoading;
+      tessLoading = new Promise((res, rej) => {
+        const sc = document.createElement('script');
+        sc.src = TESS_URL; sc.async = true;
+        sc.onload = () => window.Tesseract ? res(window.Tesseract) : rej(new Error('ocr-load'));
+        sc.onerror = () => { tessLoading = null; rej(new Error('ocr-load')); };
+        document.head.appendChild(sc);
+      });
+      return tessLoading;
+    }
+    async function ocrCanvas(c) {
+      const T = await loadTesseract();
+      if (!tessWorker) tessWorker = await T.createWorker('eng');
+      const r = await tessWorker.recognize(c);
+      return cleanOcr((r && r.data && r.data.text) || '');
+    }
+    function cleanOcr(t) {
+      return String(t).split(/\n+/).map(l => l.replace(/\s+/g, ' ').trim()).filter(l => {
+        if (l.length < 2) return false;
+        const letters = (l.match(/[A-Za-z0-9$]/g) || []).length;
+        return letters / l.length >= 0.55;
+      }).join('\n');
+    }
+
+    const MAIL_PROMPT = "You help an older person who just pointed their phone camera at something, usually a piece of mail. " +
+      "Reply in exactly this format, four lines, nothing else:\n" +
+      "KIND: JUNK or REAL or OTHER\nSCAM: YES or NO\nHEADLINE: one short sentence\nSHORT: two to four short sentences\n\n" +
+      "How to sort it. JUNK means advertising: ads, offers, coupons, pre-approved or 'you may already qualify' credit offers, sweepstakes, " +
+      "car warranty or insurance sales pitches, donation requests, anything addressed to Current Resident, and marketing dressed up to look urgent or official. " +
+      "REAL means it matters: bills, statements, government letters (Social Security, SSDI, SSI, SNAP, Medicare, Medicaid, IRS, DMV), courts, bank, medical, pharmacy, " +
+      "insurance, utility, jury duty, legal papers, personal letters, and post office notices like Return to Sender. " +
+      "OTHER means it is not mail, like a pill bottle, a sign, a product or a screen. " +
+      "Normal ads and credit card or loan offers from real companies are JUNK with SCAM: NO. " +
+      "SCAM is YES only if it pushes for money, gift cards, personal information or an urgent call-back in a suspicious way, threatens arrest or shutoff from an unknown sender, or pretends to be the government or a bank.\n\n" +
+      "HEADLINE: for REAL start with 'This is real mail:' then what it is and who it is from. " +
+      "For JUNK start with 'This is junk mail:' then what it is selling in a few words, and end with 'You can toss it.' For OTHER say what it is in one sentence.\n" +
+      "SHORT: only the facts in plain words: who it is from, what it is about, any amount due, the due date or deadline, and what they need to do, or 'Nothing to do.' " +
+      "For JUNK write only: Nothing to do. If SCAM is YES, warn them not to call, pay or give any information. " +
+      "Never read every line. Skip fine print, barcodes, account numbers and addresses. No markdown, lists or symbols except dollar signs.\n\n" +
+      "Example, a USPS sticker that says RETURN TO SENDER, NOT DELIVERABLE AS ADDRESSED, UNABLE TO FORWARD:\n" +
+      "KIND: REAL\nSCAM: NO\nHEADLINE: This is real mail: a post office notice on a letter.\n" +
+      "SHORT: This letter is being sent back to whoever mailed it. The post office couldn't deliver it to that address. If you sent it, check the address and mail it again.";
+
+    function parseMail(raw) {
+      const t = String(raw || '').replace(/\r/g, '');
+      const get = (k) => {
+        const m = t.match(new RegExp('(?:^|\\n)[\\s*#]*' + k + '[\\s*]*:\\s*([\\s\\S]*?)(?=\\n[\\s*#]*(?:KIND|SCAM|HEADLINE|SHORT|TEXT)[\\s*]*:|$)', 'i'));
+        return m ? cleanReply(m[1]) : '';
+      };
+      const km = get('KIND').match(/junk|real|other/i);
+      const out = {
+        kind: km ? km[0].toLowerCase() : 'other',
+        scam: /^\s*yes/i.test(get('SCAM')),
+        headline: get('HEADLINE'),
+        short: get('SHORT')
+      };
+      if (!out.headline && !out.short) out.headline = cleanReply(t);
+      if (out.kind === 'junk' && !out.short) out.short = 'Nothing to do.';
+      return out;
+    }
+
+    async function readPhoto(canvas) {
+      const my = ++camTurn;
+      turnId++; // drop any chat answer still on its way
+      camBusy = true;
+      cancelChoice(); stopSpeaking();
+      if (!open && remaining() > 0) openTalk(true);
+      stopListening();
+      setState('thinking');
+      const small = scaled(canvas, 1024, false);
+      const dataUrl = small.toDataURL('image/jpeg', 0.8);
+      shot.src = dataUrl; shot.hidden = false; video.hidden = true;
+      verdict.hidden = true;
+      camTip.textContent = 'Reading it\u2026';
+      addCaption('you', '\ud83d\udcf7 (showed a photo)');
+      let res = null, note = '';
+      try {
+        if (visionReady()) {
+          try {
+            const raw = await askAI([{ role: 'system', content: MAIL_PROMPT + ' Look at the photo.' },
+              { role: 'user', content: [{ type: 'text', text: 'Here is the photo.' }, { type: 'image_url', image_url: { url: dataUrl } }] }], 350);
+            res = parseMail(raw); res.mode = 'vision'; res.text = '';
+          } catch (e) {
+            note = (e && e.status === 401 || e && e.status === 403) ? 'Your key wasn\u2019t accepted, so I read the words instead.' : 'Your AI couldn\u2019t look at the picture, so I read the words instead.';
+          }
+        }
+        if (my !== camTurn) return;
+        if (!res) {
+          camTip.textContent = 'Reading the words\u2026';
+          let text = '';
+          try { text = await ocrCanvas(scaled(canvas, 2000, true)); }
+          catch (e) { throw Object.assign(new Error('ocr'), { ocr: true }); }
+          if (my !== camTurn) return;
+          if (text.replace(/[^A-Za-z]/g, '').length < 6) throw Object.assign(new Error('notext'), { notext: true });
+          camTip.textContent = 'Thinking\u2026';
+          const raw = await askFree([{ role: 'system', content: MAIL_PROMPT + ' You get the words read from the photo by a scanner; they may have small mistakes.' },
+            { role: 'user', content: 'Words read from the photo:\n' + text.slice(0, 4000) }]);
+          res = parseMail(raw); res.mode = 'ocr'; res.text = text;
+        }
+      } catch (e) {
+        if (my !== camTurn) return;
+        camBusy = false;
+        let msg;
+        if (e && e.notext) msg = visionReady() ? 'I couldn\u2019t make that out. Hold it flat, in good light, and fill the screen with it. Then tap again.'
+          : 'I couldn\u2019t find any words in that picture. Hold the paper flat, in good light, and fill the screen with it. Then tap again. To describe pictures without words, add an xAI or Gemini key in Settings.';
+        else if (e && e.ocr) msg = 'The word reader couldn\u2019t load. Check your internet and try again, or add an xAI or Gemini key in Settings.';
+        else if (e && e.nokey) msg = 'Add your API key in Settings, or switch back to the Free AI.';
+        else msg = 'The free AI is busy right now. Tap the picture to try again in a moment.';
+        addCaption('err', msg);
+        camTip.textContent = 'Tap the picture to try again.';
+        shot.hidden = true; video.hidden = camUseFile;
+        setState('speaking');
+        speak(msg, () => { if (my !== camTurn) return; afterCam(); });
+        return;
+      }
+      if (my !== camTurn) return;
+      camBusy = false;
+      res.dataUrl = dataUrl;
+      photo = res;
+      history = history.slice(-MAX_TURNS * 2);
+      presentPhoto(res, my, note);
+    }
+    function afterCam() {
+      if (open) { setState('listening'); ensureListening(); } else setState('idle');
+    }
+    function presentPhoto(res, my, note) {
+      const tag = res.scam ? 'scam' : res.kind;
+      verdict.className = tag;
+      verdict.textContent = res.scam ? '\u26a0 POSSIBLE SCAM' : res.kind === 'junk' ? 'JUNK MAIL' : res.kind === 'real' ? 'REAL MAIL' : 'NOT MAIL';
+      verdict.hidden = false;
+      camTip.textContent = 'Tap the picture to take another.';
+      let first = res.headline || '';
+      if (res.scam && !/scam/i.test(first + ' ' + res.short)) first += ' Be careful, this looks like it could be a scam. Don\u2019t call, pay, or give any information.';
+      if (note) first = note + ' ' + first;
+      addCaption('ai', first);
+      lastReply = first;
+      const hasWords = res.mode === 'vision' || (res.text || '').length > 25;
+      if (!hasWords || res.kind === 'other' && !res.text) {
+        const all = first + ' ' + (res.short || '');
+        if (res.short) addCaption('ai', res.short);
+        history.push({ role: 'assistant', content: all });
+        setState('speaking');
+        speak(all, () => { if (my === camTurn) afterCam(); });
+        return;
+      }
+      const q = 'Do you want me to read it word for word, or just give you the short version? Say one for word for word, or two for the short version.';
+      addCaption('ai', q);
+      askChoice({ one: 'Word for word', two: 'Short version', fromCam: true, timeoutMs: 12000, defaultChoice: 2,
+        onOne: () => readFull(res, my), onTwo: () => readShort(res, my) });
+      setState('speaking');
+      speak(first + ' ' + q, () => {
+        if (my !== camTurn) return;
+        afterCam();
+        startChoiceTimer();
+      });
+    }
+    function readShort(res, my) {
+      if (my !== camTurn) return;
+      const t = res.short || 'That\u2019s all.';
+      addCaption('ai', t);
+      history.push({ role: 'assistant', content: [res.headline, t].join(' ') });
+      lastReply = t;
+      setState('speaking');
+      if (open && settings.bargeIn) setTimeout(() => { if (state === 'speaking') ensureListening(); }, 350);
+      speak(t + ' You can ask me anything about it.', () => { if (my === camTurn) afterCam(); });
+    }
+    async function readFull(res, my) {
+      if (my !== camTurn) return;
+      let full = res.full || res.text || '';
+      if (!full && res.mode === 'vision') {
+        setState('thinking'); stopListening();
+        camTip.textContent = 'Reading every word\u2026';
+        try {
+          full = cleanReply(await askAI([{ role: 'system', content: 'Write out all the readable words in this photo, in reading order, as plain text. No comments, no markdown.' },
+            { role: 'user', content: [{ type: 'text', text: 'Read this word for word.' }, { type: 'image_url', image_url: { url: res.dataUrl } }] }], 1500));
+        } catch (e) { full = ''; }
+        if (my !== camTurn) return;
+        camTip.textContent = 'Tap the picture to take another.';
+        res.full = full;
+      }
+      if (!full) { addCaption('err', 'I couldn\u2019t read it word for word, so here\u2019s the short version.'); return readShort(res, my); }
+      const spoken = full.replace(/\n+/g, '. ').replace(/\.\s*\./g, '.');
+      addCaption('ai', 'Word for word: ' + full.replace(/\n+/g, ' / '));
+      history.push({ role: 'assistant', content: 'I read it word for word.' });
+      lastReply = spoken;
+      setState('speaking');
+      if (open && settings.bargeIn) setTimeout(() => { if (state === 'speaking') ensureListening(); }, 350);
+      speak('Here\u2019s what it says. ' + spoken, () => { if (my === camTurn) afterCam(); });
+    }
     typeForm.addEventListener('submit', (e) => {
       e.preventDefault();
       const t = typeInput.value.trim();
@@ -656,7 +1091,12 @@
     $('settingsForm').addEventListener('submit', saveSettings);
 
     // Test/debug hook (no secrets exposed)
-    window.CallAI = { get state() { return state; }, get open() { return open; }, get history() { return history.slice(); }, version: '2.0-voice' };
+    window.CallAI = {
+      get state() { return state; }, get open() { return open; }, get history() { return history.slice(); },
+      get photo() { return photo ? { kind: photo.kind, scam: photo.scam, headline: photo.headline, short: photo.short, mode: photo.mode, text: photo.text } : null; },
+      get choice() { return choice ? { one: choice.one, two: choice.two } : null; },
+      version: '3.0-camera'
+    };
   })();
   </script>
 </body>

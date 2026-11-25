@@ -33,7 +33,21 @@ Two giant buttons: **Live talk** and **Camera**. Everything else, like the histo
 - If location is blocked or off, it asks you to say where you are ("I'm at Rock City") and looks that place up on Wikipedia instead. If a name could mean more than one place, it says which one it picked so you can correct it.
 - Questions like "history of the Super Bowl" that aren't about a place get a normal answer.
 
+
+## Dad page (one button)
+
+A simpler page for an older parent: [call-ai/dad](https://walterhendersonjr41-blip.github.io/call-ai/dad/). The whole screen is one button.
+
+- **Tap once** to talk. It listens, answers out loud, then listens again. Tap once more to stop.
+- **Tap twice** (two quick taps) to read a letter or paper. The back camera opens, it says "Hold it still," then "Reading now," and takes the picture by itself. No extra button to snap. It speaks a short summary right away: who it is from, what it is about, any amount due, the due date, and what to do. It will say if it looks like junk or a possible scam.
+- After the summary, tap once to ask a follow-up question by voice, or tap twice to read something else.
+- If the live camera cannot start, it will ask you to tap once to take or choose a photo instead.
+- No login. Free (same Pollinations AI and Tesseract word reader). Talk time on this page is 60 minutes a day. Reading mail still works after that.
+- Works in Android Chrome and iPhone Safari, on HTTPS. The first time, the phone will ask to allow the microphone and camera.
+- The original two-button app at the main address is unchanged.
+
 ## Files
-- `index.html`: the whole app. It's static, works on GitHub Pages, and has no server and no keys in the code.
+- `index.html`: the original two-button app. It's static, works on GitHub Pages, and has no server and no keys in the code.
+- `dad/index.html`: the one-button page described above, at `/dad/`.
 
 Created by Walter Henderson Jr.

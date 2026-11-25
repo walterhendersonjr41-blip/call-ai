@@ -212,7 +212,7 @@
       <label class="check"><input type="checkbox" id="bargeIn" /> Let me interrupt while it talks</label>
       <label for="provider">AI brain</label>
       <select id="provider">
-        <option value="free">Free AI (no key needed)</option>
+        <option value="free">Free fast AI (no key needed)</option>
         <option value="xai">xAI Grok (your own key)</option>
         <option value="gemini">Google Gemini (your own key)</option>
       </select>
@@ -351,39 +351,52 @@
       if (resumeTick) { clearInterval(resumeTick); resumeTick = null; }
     }
     let speakingText = '';
-    function speak(text, onDone) {
-      if (!synth || !window.SpeechSynthesisUtterance) { onDone && onDone(); return; }
-      synth.cancel();
-      speakingText = text;
-      const chunks = splitSentences(text);
-      const voice = pickVoice();
-      let i = 0, finished = false;
-      const done = () => {
-        if (finished) return;
-        finished = true;
-        speakingText = '';
-        stopResumeWatch();
-        onDone && onDone();
-      };
-      speak.cancelCurrent = () => { finished = true; speakingText = ''; stopResumeWatch(); try { synth.cancel(); } catch (e) {} };
-      startResumeWatch();
-      const next = () => {
-        if (finished) return;
-        if (i >= chunks.length) return done();
-        const u = new SpeechSynthesisUtterance(chunks[i++]);
-        if (voice) { u.voice = voice; u.lang = voice.lang; } else u.lang = 'en-US';
-        u.rate = settings.rate;
-        const watchdog = setTimeout(next, Math.max(2500, (u.text.length / 10) * 1000 / (settings.rate || 1) + 1500));
-        const step = () => { clearTimeout(watchdog); next(); };
-        u.onend = step;
-        u.onerror = step;
-        try { synth.speak(u); } catch (e) { step(); }
-      };
-      next();
+    // One speech queue so a streamed answer can be spoken sentence by sentence as it arrives.
+    const V = { q: [], busy: false, gen: 0, idle: [] };
+    function vIdleFire() {
+      if (V.busy || V.q.length) return;
+      const cbs = V.idle; V.idle = [];
+      cbs.forEach(cb => { try { cb(); } catch (e) {} });
     }
-    function stopSpeaking() { if (speak.cancelCurrent) speak.cancelCurrent(); else if (synth) { try { synth.cancel(); } catch (e) {} } stopResumeWatch(); }
+    function vNext() {
+      if (V.busy) return;
+      const text = V.q.shift();
+      if (text === undefined) { vIdleFire(); return; }
+      if (!synth || !window.SpeechSynthesisUtterance) { vNext(); return; }
+      V.busy = true;
+      const g = V.gen;
+      let done = false, wd;
+      const fin = () => { if (done) return; done = true; clearTimeout(wd); if (g !== V.gen) return; V.busy = false; vNext(); };
+      const u = new SpeechSynthesisUtterance(text);
+      const voice = pickVoice();
+      if (voice) { u.voice = voice; u.lang = voice.lang; } else u.lang = 'en-US';
+      u.rate = settings.rate;
+      u.onend = fin;
+      u.onerror = fin;
+      wd = setTimeout(fin, Math.max(2500, (text.length / 10) * 1000 / (settings.rate || 1) + 1500));
+      startResumeWatch();
+      try { synth.speak(u); } catch (e) { fin(); }
+    }
+    function queueSpeech(text) {
+      splitSentences(text).forEach(s => { speakingText += ' ' + s; V.q.push(s); });
+      vNext();
+    }
+    function onIdle(cb) {
+      V.idle.push(cb);
+      if (!V.busy && !V.q.length) setTimeout(vIdleFire, 0);
+    }
+    function stopSpeaking() {
+      V.gen++; V.q = []; V.idle = []; V.busy = false; speakingText = '';
+      stopResumeWatch();
+      if (synth) { try { synth.cancel(); } catch (e) {} }
+    }
+    function speak(text, onDone) {
+      stopSpeaking();
+      queueSpeech(text);
+      if (onDone) onIdle(onDone);
+    }
 
-    // ---------- Listening ----------
+        // ---------- Listening ----------
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition || null;
     let rec = null, recActive = false, micBlocked = false;
     function setupRec() {
@@ -451,38 +464,52 @@
         setStatus('Listening…');
       }
       if (finalText.trim()) {
+        clearEp();
         setHint('');
         userSaid(finalText.trim());
       } else {
         setHint(interim.trim() + '…');
+        // Don't wait for the browser's slow end-of-speech: if the words stop changing for ~0.75s, go.
+        epText = interim.trim();
+        if (epTimer) clearTimeout(epTimer);
+        epTimer = setTimeout(() => {
+          const said = epText; epTimer = null; epText = '';
+          if (open && state === 'listening' && said.length >= 2) { stopListening(); userSaid(said); }
+        }, EP_MS);
       }
     }
+    let epTimer = null, epText = '';
+    const EP_MS = 750;
+    function clearEp() { if (epTimer) { clearTimeout(epTimer); epTimer = null; } epText = ''; }
 
     // ---------- Conversation + AI ----------
-    const SYSTEM_PROMPT = "You are Call AI, a warm, patient voice assistant talking with an older man. " +
-      "Talk like a helpful person on the phone. Keep every answer short: one to three spoken sentences. " +
-      "Use plain words only: no markdown, no lists, no emojis, no links, no special symbols. " +
-      "If you didn't catch something, ask a quick follow-up question. Do not ask him to press 1 or 2.";
-    const MAIL_PROMPT = "You help an older person who just pointed their phone camera at something, usually a piece of mail. " +
-      "He wants a short spoken summary right away. Do not ask whether to read it word for word. " +
-      "Reply in exactly this format, four lines, nothing else:\n" +
-      "KIND: JUNK or REAL or OTHER\nSCAM: YES or NO\nHEADLINE: one short sentence\nSHORT: two to four short sentences\n\n" +
+    function sysPrompt() {
+      const now = new Date().toLocaleString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+      return "You are Call AI, a warm, patient, straight-talking voice assistant for an older man, heard out loud on a phone speaker. " +
+        "Right now it is " + now + ". " +
+        "Answer his question first, in one to three short spoken sentences, in plain everyday words. " +
+        "Be accurate. If you are not sure, or it may have changed, say so plainly instead of guessing. Never make up facts, names, numbers or phone numbers. " +
+        "No markdown, lists, emojis, links or symbols. Do not say you are an AI or a language model. Do not ask him to press buttons. " +
+        "If you did not catch something, ask one short question. If he sounds sick or in danger, tell him to call 911.";
+    }
+    const MAIL_PROMPT = "You read mail out loud to an older man who just pointed his phone camera at a piece of paper. " +
+      "Start with ONE line in exactly this form: VERDICT: REAL or VERDICT: JUNK or VERDICT: SCAM or VERDICT: OTHER. " +
+      "Then a new line, then what you say out loud. Say it in 2 to 5 short sentences, plain words, like a friend reading it to him.\n\n" +
       "How to sort it. JUNK means advertising: ads, offers, coupons, pre-approved or 'you may already qualify' credit offers, sweepstakes, " +
       "car warranty or insurance sales pitches, donation requests, anything addressed to Current Resident, and marketing dressed up to look urgent or official. " +
       "REAL means it matters: bills, statements, government letters (Social Security, SSDI, SSI, SNAP, Medicare, Medicaid, IRS, DMV), courts, bank, medical, pharmacy, " +
-      "insurance, utility, jury duty, legal papers, personal letters, and post office notices like Return to Sender. " +
-      "OTHER means it is not mail, like a pill bottle, a sign, a product or a screen. " +
-      "Normal ads and credit card or loan offers from real companies are JUNK with SCAM: NO. " +
-      "SCAM is YES only if it pushes for money, gift cards, personal information or an urgent call-back in a suspicious way, threatens arrest or shutoff from an unknown sender, or pretends to be the government or a bank.\n\n" +
-      "HEADLINE: for REAL start with 'This is real mail:' then what it is and who it is from. " +
-      "For JUNK start with 'This is junk mail:' then what it is selling in a few words, and end with 'You can toss it.' For OTHER say what it is in one sentence.\n" +
-      "SHORT: only the facts in plain words: who it is from, what it is about, any amount due, the due date or deadline, and what they need to do. " +
-      "The name after Dear or To is who the letter is for, not who sent it. The sender is usually the company or agency at the top. " +
-      "If there is an amount due or a deadline, say they need to pay or respond by that date. Say 'Nothing to do' only for junk, or when nothing is owed and no reply is needed. " +
-      "For JUNK write only: Nothing to do. If SCAM is YES, warn them not to call, pay or give any information. " +
-      "Never read every line. Skip fine print, barcodes, account numbers and addresses. No markdown, lists or symbols except dollar signs.";
+      "insurance, utility, jury duty, legal papers, personal letters, and post office notices. " +
+      "OTHER means it is not mail, like a pill bottle, a sign, a product or a screen; just say what it is. " +
+      "Normal ads and credit card or loan offers from real companies are JUNK, not SCAM. " +
+      "SCAM only if it pushes for money, gift cards, personal information or an urgent call-back in a suspicious way, threatens arrest or shutoff from an unknown sender, or pretends to be the government or a bank.\n\n" +
+      "What to say. REAL: start with 'This is real mail', then who it is from and what it is about, then any amount he owes, the due date or deadline, and what he needs to do. " +
+      "JUNK: say 'This is junk mail', what it is selling in a few words, then 'You can toss it.' " +
+      "SCAM: start with 'Be careful, this looks like a scam', say why in one sentence, and tell him not to call, pay or give any information.\n" +
+      "Rules: use only what is actually written. If an amount or date is not there, do not mention it. The name after Dear or To is who it is for, not who sent it; the sender is usually the company or agency at the top. " +
+      "Say dates like December tenth. Skip fine print, barcodes, account numbers and street addresses. If it is too blurry or cut off to read, say so and ask him to hold it flat and try again. " +
+      "No markdown, lists or symbols except dollar signs.";
 
-    const MAX_TURNS = 10;
+        const MAX_TURNS = 6;
     let history = [];
     let lastReply = '';
     let turnId = 0;
@@ -513,31 +540,115 @@
         return await r.json();
       } finally { clearTimeout(to); }
     }
-    async function askFree(msgs) {
-      msgs = msgs.map(m => Array.isArray(m.content) ? { role: m.role, content: m.content.filter(p => p.type === 'text').map(p => p.text).join(' ') } : m);
-      const body = { model: 'openai', messages: msgs, private: true, referrer: 'call-ai' };
-      try {
-        const d = await fetchJSON('https://text.pollinations.ai/openai', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
-        }, 30000);
-        const c = d && d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content;
-        if (c) return c;
-      } catch (e) { /* fall through to GET */ }
-      await new Promise(r => setTimeout(r, 1500));
-      const convo = msgs.filter(m => m.role !== 'system').slice(-6)
-        .map(m => (m.role === 'assistant' ? 'Assistant: ' : 'User: ') + m.content).join('\n').slice(-1500) + '\nAssistant:';
-      const sys = (msgs[0] && msgs[0].role === 'system') ? String(msgs[0].content).slice(0, 2500) : SYSTEM_PROMPT;
-      const url = 'https://text.pollinations.ai/' + encodeURIComponent(convo) +
-        '?model=openai&private=true&referrer=call-ai&system=' + encodeURIComponent(sys);
+    // ---- Fast path: tiny proxy (Netlify) that holds the Groq key. Pollinations is only the fallback. ----
+    const PROXY = 'https://dad-ai-proxy.netlify.app';
+    let proxyKey = null, proxyCheckedAt = 0; // null = unknown, true = fast AI ready, false = no key / unreachable
+    function checkProxy() {
+      proxyCheckedAt = Date.now();
+      const ctl = new AbortController(); const to = setTimeout(() => ctl.abort(), 5000);
+      return fetch(PROXY + '/api/health', { signal: ctl.signal }).then(r => r.json())
+        .then(d => { proxyKey = !!(d && d.hasKey); }).catch(() => { proxyKey = false; }).finally(() => clearTimeout(to));
+    }
+    const proxyReady = checkProxy();
+    function flattenText(msgs) {
+      return msgs.map(m => Array.isArray(m.content) ? { role: m.role, content: m.content.filter(p => p.type === 'text').map(p => p.text).join(' ') } : m);
+    }
+    async function readSSE(resp, onDelta) {
+      const reader = resp.body.getReader(); const dec = new TextDecoder(); let buf = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
+          if (line.indexOf('data:') !== 0) continue;
+          const pl = line.slice(5).trim();
+          if (pl === '[DONE]') return;
+          try {
+            const j = JSON.parse(pl);
+            const c = j.choices && j.choices[0] && j.choices[0].delta && j.choices[0].delta.content;
+            if (c) onDelta(c);
+          } catch (e) { /* partial line */ }
+        }
+      }
+    }
+    // POST that streams. Rejects before any text arrives if it cannot start; once text flows, errors just end the stream.
+    async function streamPost(url, body, onTotal, firstMs) {
       const ctl = new AbortController();
-      const to = setTimeout(() => ctl.abort(), 30000);
+      let total = '';
+      const first = setTimeout(() => ctl.abort(), firstMs || 10000);
+      const overall = setTimeout(() => ctl.abort(), 40000);
       try {
-        const r = await fetch(url, { signal: ctl.signal });
+        const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: ctl.signal });
         if (!r.ok) { const err = new Error('HTTP ' + r.status); err.status = r.status; throw err; }
-        const t = (await r.text()).trim();
-        if (!t || t.charAt(0) === '{') throw new Error('bad reply');
-        return t;
-      } finally { clearTimeout(to); }
+        try {
+          await readSSE(r, (d) => { clearTimeout(first); total += d; onTotal(total); });
+        } catch (e) { if (!total) throw e; }
+        if (!total) throw new Error('empty');
+        return total;
+      } finally { clearTimeout(first); clearTimeout(overall); }
+    }
+    // Streams the answer: onText(totalSoFar) is called as words arrive. Returns the full text.
+    async function streamAI(msgs, opts) {
+      opts = opts || {};
+      const onText = opts.onText || function () {};
+      const p = settings.provider;
+      if ((p === 'xai' || p === 'gemini') && settings.key(p)) { // user's own key: not streamed
+        const out = await askAI(msgs, opts.maxTokens); onText(out); return out;
+      }
+      if (proxyKey === null) await Promise.race([proxyReady, sleep(2500)]);
+      if (proxyKey === false && Date.now() - proxyCheckedAt > 120000) checkProxy(); // retry in the background later
+      if (proxyKey !== false) {
+        try {
+          const t = await streamPost(PROXY + '/api/chat', { messages: msgs, stream: true, max_tokens: opts.maxTokens || 250 }, onText, 12000);
+          lastVia = 'fast'; return t;
+        } catch (e) {
+          if (e && e.status === 503) proxyKey = false;
+          if (e && e.partial) throw e;
+        }
+      }
+      if (opts.vision) throw Object.assign(new Error('novision'), { novision: true });
+      // Fallback: Pollinations. Free and keyless, but only 1 reply per 45 seconds per phone, so it is a last resort.
+      const pm = flattenText(msgs);
+      try {
+        const t = await streamPost('https://text.pollinations.ai/openai', { model: 'openai-fast', messages: pm, stream: true, private: true, referrer: 'call-ai' }, onText, 9000);
+        lastVia = 'fallback'; return t;
+      } catch (e) {
+        if (e && (e.status === 402 || e.status === 429)) throw Object.assign(new Error('limit'), { limit: true, status: e.status });
+        throw e;
+      }
+    }
+    let lastVia = '';
+    // Turns streamed text into spoken sentences, queuing each one the moment it is complete.
+    function makeFeeder() {
+      let consumed = 0, buf = '', any = false;
+      const f = {
+        spoken: [], onFirst: null,
+        emit(s) {
+          s = cleanReply(s); if (!s) return;
+          if (!any) { any = true; if (f.onFirst) f.onFirst(); }
+          f.spoken.push(s); queueSpeech(s);
+        },
+        feedTotal(total) { const d = total.slice(consumed); consumed = total.length; f.feed(d); },
+        feed(d) {
+          buf += d;
+          for (;;) {
+            const m = buf.match(/^([\s\S]*?[.!?]["')\]]*)\s+([\s\S]*)$/);
+            if (!m) break;
+            f.emit(m[1]); buf = m[2];
+          }
+          if (buf.length > 150) { const i = buf.lastIndexOf(', ', 120); if (i > 30) { f.emit(buf.slice(0, i + 1)); buf = buf.slice(i + 2); } }
+        },
+        end() { f.emit(buf); buf = ''; },
+        get started() { return any; }
+      };
+      return f;
+    }
+    async function askFree(msgs) { // plain non-streamed call, kept for the Settings "Test" and tooling
+      let out = '';
+      await streamAI(msgs, { onText: (t) => { out = t; } });
+      return out;
     }
     async function askXai(msgs, maxTokens) {
       const key = settings.key('xai');
@@ -569,7 +680,7 @@
       const d = await fetchJSON(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-        body: JSON.stringify({ systemInstruction: { parts: [{ text: sysMsg ? sysMsg.content : SYSTEM_PROMPT }] }, contents })
+        body: JSON.stringify({ systemInstruction: { parts: [{ text: sysMsg ? sysMsg.content : sysPrompt() }] }, contents })
       }, 45000);
       const parts = d && d.candidates && d.candidates[0] && d.candidates[0].content && d.candidates[0].content.parts;
       return (parts || []).map(p => p.text || '').join(' ');
@@ -583,14 +694,14 @@
     function visionReady() { const p = settings.provider; return p !== 'free' && !!settings.key(p); }
 
     function buildChatMessages() {
-      let sys = SYSTEM_PROMPT;
+      let sys = sysPrompt();
       const pre = [];
       if (photo) {
         sys += " The caller just showed you a photo with their camera. ";
         if (photo.text) sys += "Words read from the photo (may have small reading mistakes): \"\"\"" + photo.text.slice(0, 3000) + "\"\"\". ";
         sys += "You already told them: " + [photo.headline, photo.short].filter(Boolean).join(' ') +
           " Answer their questions about it in plain words. Only read it word for word if they ask.";
-        if (photo.mode === 'vision' && visionReady()) {
+        if (photo.mode === 'vision' && (visionReady() || proxyKey === true)) {
           pre.push({ role: 'user', content: [{ type: 'text', text: 'This is the photo I showed you.' }, { type: 'image_url', image_url: { url: photo.dataUrl } }] });
           pre.push({ role: 'assistant', content: [photo.headline, photo.short].filter(Boolean).join(' ') || 'Got it.' });
         }
@@ -599,6 +710,7 @@
     }
     async function userSaid(text) {
       if (!open || !text) return;
+      clearEp();
       const my = ++turnId;
       camTurn++;
       stopListening();
@@ -611,45 +723,49 @@
       return chatTurn(my);
     }
     async function chatTurn(my) {
-      let reply;
+      const feeder = makeFeeder();
+      feeder.onFirst = () => {
+        if (my !== turnId || !open) return;
+        setState('speaking'); setStatus('Speaking…'); setHint('');
+        if (settings.bargeIn) setTimeout(() => { if (state === 'speaking') ensureListening(); }, 350);
+      };
+      let reply = '';
+      stopSpeaking();
       try {
-        reply = cleanReply(await askAI(buildChatMessages()));
+        reply = cleanReply(await streamAI(buildChatMessages(), { maxTokens: 220, onText: (total) => {
+          if (my !== turnId || !open) return;
+          feeder.feedTotal(total);
+          setCaption(cleanReply(total));
+        } }));
         if (!reply) throw new Error('empty');
       } catch (e) {
         if (my !== turnId || !open) return;
         history.pop();
         let msg;
         if (e && e.nokey) msg = 'Add your API key in Settings, or switch back to the Free AI.';
-        else if (settings.provider === 'free') msg = 'The free AI is busy right now. Please try again in a moment.';
-        else if (e && (e.status === 401 || e.status === 403 || e.status === 400)) msg = 'Your API key or model was not accepted. Check it in Settings.';
-        else msg = 'I could not reach the AI just now. Please try again in a moment.';
+        else if (e && (e.status === 401 || e.status === 403 || e.status === 400) && settings.provider !== 'free') msg = 'Your API key or model was not accepted. Check it in Settings.';
+        else if (e && e.limit) msg = 'The free helper needs a minute to rest. Please ask me again in a little while.';
+        else msg = 'Sorry, I could not get an answer just now. Please ask me again.';
         setCaption(msg);
-        setState('listening');
-        setStatus('Listening…');
+        setState('listening'); setStatus('Listening…');
         speak(msg, () => { if (my === turnId && open) { setState('listening'); ensureListening(); } });
         ensureListening();
         return;
       }
       if (my !== turnId || !open) return;
+      feeder.end();
       history.push({ role: 'assistant', content: reply });
       history = history.slice(-MAX_TURNS * 2);
       lastReply = reply;
       setCaption(reply);
-      setState('speaking');
-      setStatus('Speaking…');
-      if (settings.bargeIn) setTimeout(() => { if (state === 'speaking') ensureListening(); }, 350);
-      speak(reply, () => {
+      onIdle(() => {
         if (my !== turnId || !open) return;
-        if (state === 'speaking') {
-          setState('listening');
-          setStatus('Listening…');
-          setHint('Tap once to stop.');
-        }
+        setState('listening'); setStatus('Listening…'); setHint('Tap once to stop.');
         ensureListening();
       });
     }
 
-    // ---------- UI ----------
+        // ---------- UI ----------
     let state = 'idle', mode = 'idle', open = false, tick = null;
     let lastIntent = '';
     let pendingFilePick = false;
@@ -796,6 +912,7 @@
       setStatus('Starting camera…');
       setCaption('');
       setHint('Hold the paper in front of the camera.');
+      if (proxyKey !== true && !visionReady()) warmOcr();
       showType(false);
 
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.isSecureContext) {
@@ -841,12 +958,10 @@
       if (!ok || !video.videoWidth) {
         return requestFile('I could not see the camera picture. Tap once to take a photo.', my);
       }
-      await sleep(2200);
+      await sleep(1700);
       if (my !== camTurn || !camOn) return;
       setStatus('Reading now…');
-      speak('Reading now.');
-      await sleep(400);
-      if (my !== camTurn || !camOn) return;
+      queueSpeech('Reading now.');
       const c = document.createElement('canvas');
       c.width = video.videoWidth;
       c.height = video.videoHeight;
@@ -877,10 +992,15 @@
       });
       return tessLoading;
     }
+    let tessWorkerP = null;
+    function getOcrWorker() {
+      if (!tessWorkerP) tessWorkerP = loadTesseract().then(T => T.createWorker('eng')).catch(e => { tessWorkerP = null; throw e; });
+      return tessWorkerP;
+    }
+    function warmOcr() { getOcrWorker().catch(() => {}); }
     async function ocrCanvas(c) {
-      const T = await loadTesseract();
-      if (!tessWorker) tessWorker = await T.createWorker('eng');
-      const r = await tessWorker.recognize(c);
+      const w = await getOcrWorker();
+      const r = await w.recognize(c);
       return cleanOcr((r && r.data && r.data.text) || '');
     }
     function cleanOcr(t) {
@@ -890,22 +1010,20 @@
         return letters / l.length >= 0.55;
       }).join('\n');
     }
-    function parseMail(raw) {
-      const t = String(raw || '').replace(/\r/g, '');
-      const get = (k) => {
-        const m = t.match(new RegExp('(?:^|\\n)[\\s*#]*' + k + '[\\s*]*:\\s*([\\s\\S]*?)(?=\\n[\\s*#]*(?:KIND|SCAM|HEADLINE|SHORT|TEXT)[\\s*]*:|$)', 'i'));
-        return m ? cleanReply(m[1]) : '';
-      };
-      const km = get('KIND').match(/junk|real|other/i);
-      const out = {
-        kind: km ? km[0].toLowerCase() : 'other',
-        scam: /^\s*yes/i.test(get('SCAM')),
-        headline: get('HEADLINE'),
-        short: get('SHORT')
-      };
-      if (!out.headline && !out.short) out.headline = cleanReply(t);
-      if (out.kind === 'junk' && !out.short) out.short = 'Nothing to do.';
-      return out;
+    function parseVerdict(total) {
+      // First line looks like "VERDICT: REAL". Returns null until that whole line has arrived.
+      const m = String(total).match(/VERDICT[\s*:]*\**\s*(REAL|JUNK|SCAM|OTHER)\**[^\n]*\n/i);
+      if (!m) return null;
+      const v = m[1].toLowerCase();
+      return { kind: v === 'scam' ? 'real' : v, scam: v === 'scam', start: m.index + m[0].length };
+    }
+    function verdictLabel(r) {
+      return r.scam ? 'Possible scam' : r.kind === 'junk' ? 'Junk mail' : r.kind === 'real' ? 'Real mail' : 'Here is what I see';
+    }
+    function parseMail(raw) { // whole-text version of the same format (used by tests)
+      const v = parseVerdict(String(raw || '').replace(/\r/g, '').replace(/\n?$/, '\n'));
+      if (!v) return { kind: 'other', scam: false, spoken: cleanReply(raw) };
+      return { kind: v.kind, scam: v.scam, spoken: cleanReply(String(raw).slice(v.start)) };
     }
     async function readPhoto(canvas, my) {
       if (my == null) my = ++camTurn;
@@ -916,91 +1034,95 @@
       setState('reading');
       setStatus('Reading…');
       setHint('Give me a moment.');
-      const small = scaled(canvas, 1024, false);
-      const dataUrl = small.toDataURL('image/jpeg', 0.8);
+      const small = scaled(canvas, 1280, false);
+      const dataUrl = small.toDataURL('image/jpeg', 0.82);
       shot.src = dataUrl;
       shot.hidden = false;
       video.hidden = true;
-      let res = null, note = '';
+      const t0 = Date.now();
+      const feeder = makeFeeder();
+      let verdict = null, ocrText = '', usedMode = '', full = '';
+      feeder.onFirst = () => {
+        if (my !== camTurn) return;
+        setState('speaking');
+        setStatus(verdict ? verdictLabel(verdict) : 'Here is what I read');
+        setHint('');
+      };
+      const onText = (total) => {
+        if (my !== camTurn) return;
+        if (!verdict) {
+          const v = parseVerdict(total);
+          if (v) verdict = v;
+          else if (total.length > 80) verdict = { kind: 'other', scam: false, start: 0 };
+          else return;
+          setStatus(verdictLabel(verdict));
+        }
+        const body = total.slice(verdict.start);
+        feeder.feedTotal(body);
+        setCaption(cleanReply(body));
+      };
       try {
-        if (visionReady()) {
+        let got = false;
+        if (proxyKey === null) await Promise.race([proxyReady, sleep(2500)]);
+        if (proxyKey === true || visionReady()) {
           try {
-            const raw = await askAI([{ role: 'system', content: MAIL_PROMPT + ' Look at the photo.' },
-              { role: 'user', content: [{ type: 'text', text: 'Here is the photo.' }, { type: 'image_url', image_url: { url: dataUrl } }] }], 350);
-            res = parseMail(raw); res.mode = 'vision'; res.text = '';
-          } catch (e) {
-            note = 'I could not look at the picture with your AI key, so I read the words instead.';
-          }
+            full = await streamAI([{ role: 'system', content: MAIL_PROMPT },
+              { role: 'user', content: [{ type: 'text', text: 'Here is the photo.' }, { type: 'image_url', image_url: { url: dataUrl } }] }],
+              { maxTokens: 350, vision: true, onText });
+            got = !!full; usedMode = 'vision';
+          } catch (e) { got = false; }
+          if (feeder.started) got = true; // it already began speaking: do not start over
         }
         if (my !== camTurn) return null;
-        if (!res) {
+        if (!got) {
           setStatus('Reading the words…');
-          let text = '';
-          try { text = await ocrCanvas(scaled(canvas, 2000, true)); }
+          try { ocrText = await ocrCanvas(scaled(canvas, 2000, true)); }
           catch (e) { throw Object.assign(new Error('ocr'), { ocr: true }); }
           if (my !== camTurn) return null;
-          if (text.replace(/[^A-Za-z]/g, '').length < 6) throw Object.assign(new Error('notext'), { notext: true });
-          setStatus('Thinking…');
-          setState('thinking');
-          const raw = await askFree([{ role: 'system', content: MAIL_PROMPT + ' You get the words read from the photo by a scanner; they may have small mistakes.' },
-            { role: 'user', content: 'Words read from the photo:\n' + text.slice(0, 4000) }]);
-          res = parseMail(raw); res.mode = 'ocr'; res.text = text;
+          if (ocrText.replace(/[^A-Za-z]/g, '').length < 6) throw Object.assign(new Error('notext'), { notext: true });
+          setState('thinking'); setStatus('Thinking…');
+          full = await streamAI([{ role: 'system', content: MAIL_PROMPT + ' You get the words read from the photo by a scanner; they may have small mistakes.' },
+            { role: 'user', content: 'Words read from the photo:\n' + ocrText.slice(0, 4000) }], { maxTokens: 350, onText });
+          usedMode = 'ocr';
         }
       } catch (e) {
         if (my !== camTurn) return null;
-        camBusy = false;
-        camOn = false;
-        stopStream();
-        shot.hidden = true;
+        camBusy = false; camOn = false; stopStream(); shot.hidden = true;
         let msg;
         if (e && e.notext) msg = 'I could not find any words in that picture. Hold the paper flat, in good light, and fill the screen with it. Then tap twice to try again.';
         else if (e && e.ocr) msg = 'The word reader could not load. Check your internet and tap twice to try again.';
-        else msg = 'The free AI is busy right now. Tap twice to try again in a moment.';
-        setState('error');
-        setStatus('I could not read that');
-        setCaption(msg);
+        else if (e && e.limit) msg = 'The free helper needs a minute to rest. Tap twice to try again in a little while.';
+        else msg = 'Sorry, I could not get an answer just now. Tap twice to try again in a moment.';
+        setState('error'); setStatus('I could not read that'); setCaption(msg);
         setHint('Tap twice to try again, or once to talk.');
         lastIntent = 'read-error';
         speak(msg, () => { if (my === camTurn) idleScreen(); });
         return null;
       }
       if (my !== camTurn) return null;
-      camBusy = false;
-      camOn = false;
-      stopStream();
-      res.dataUrl = dataUrl;
-      photo = res;
+      if (!verdict) { const v = parseVerdict(full + '\n'); verdict = v || { kind: 'other', scam: false, start: 0 }; }
+      const body = cleanReply(full.slice(verdict.start));
+      // make sure everything was queued, even a last sentence with no trailing space
+      if (!feeder.started) feedAll(feeder, full.slice(verdict.start)); else feeder.feedTotal(full.slice(verdict.start));
+      feeder.end();
+      if (verdict.scam && !/scam|careful/i.test(body)) queueSpeech('Be careful. This could be a scam. Do not call, pay, or give any information.');
+      camBusy = false; camOn = false; stopStream();
+      const sents = feeder.spoken.slice();
+      photo = { kind: verdict.kind, scam: verdict.scam, headline: sents[0] || '', short: sents.slice(1).join(' '), text: ocrText, mode: usedMode, dataUrl, ms: Date.now() - t0, via: lastVia };
       history = [];
-      presentPhoto(res, my, note);
-      return res;
-    }
-    function presentPhoto(res, my, note) {
-      let spoken = '';
-      if (res.scam) {
-        spoken = (res.headline || 'Be careful.') + ' This looks like it could be a scam. Do not call, pay, or give any information. ' + (res.short || '');
-      } else if (res.kind === 'junk') {
-        spoken = (res.headline || 'This is junk mail.') + ' ' + (res.short || 'Nothing to do. You can toss it.');
-      } else {
-        spoken = [res.headline, res.short].filter(Boolean).join(' ');
-      }
-      if (note) spoken = note + ' ' + spoken;
-      spoken = spoken.replace(/\s+/g, ' ').trim();
-      if (!spoken) spoken = 'I read it, but I am not sure what it says.';
-      const shown = spoken;
-      spoken += ' You can tap once to ask me about it, or tap twice to read something else.';
-      lastReply = spoken;
+      lastReply = body;
       setState('speaking');
-      setStatus(res.scam ? 'Possible scam' : res.kind === 'junk' ? 'Junk mail' : res.kind === 'real' ? 'Real mail' : 'Here is what I read');
-      setCaption(shown);
+      setStatus(verdictLabel(verdict));
+      setCaption(body);
       setHint(PHOTO_HINT);
       mode = 'idle';
-      speak(spoken, () => {
-        if (my !== camTurn) return;
-        shot.hidden = true;
-        idleScreen();
-      });
+      queueSpeech('You can tap once to ask me about it, or tap twice to read something else.');
+      onIdle(() => { if (my !== camTurn) return; shot.hidden = true; idleScreen(); });
+      return photo;
     }
-    filePick.addEventListener('change', () => {
+    function feedAll(feeder, s) { feeder.feedTotal(s); }
+
+        filePick.addEventListener('change', () => {
       const f = filePick.files && filePick.files[0];
       pendingFilePick = false;
       if (!f) {
@@ -1179,6 +1301,10 @@
       singleTap: onSingleTap,
       doubleTap: onDoubleTap,
       parseMail,
+      parseVerdict,
+      get proxyKey() { return proxyKey; },
+      get lastVia() { return lastVia; },
+      streamAI,
       cleanOcr,
       ocrCanvas,
       async readTestImage(dataUrl) {

@@ -42,7 +42,10 @@ A simpler page for an older parent: [call-ai/dad](https://walterhendersonjr41-bl
 - **Tap twice** (two quick taps) to read a letter or paper. The back camera opens, it says "Hold it still," then "Reading now," and takes the picture by itself. No extra button to snap. It speaks a short summary right away: who it is from, what it is about, any amount due, the due date, and what to do. It will say if it looks like junk or a possible scam.
 - After the summary, tap once to ask a follow-up question by voice, or tap twice to read something else.
 - If the live camera cannot start, it will ask you to tap once to take or choose a photo instead.
-- No login. Free (same Pollinations AI and Tesseract word reader). Talk time on this page is 60 minutes a day. Reading mail still works after that.
+- **Fast AI, still free.** The page talks to a tiny helper service (`dad-ai-proxy`, on Netlify) that uses Netlify's built-in free AI Gateway (Gemini). Answers start speaking in about a second, one sentence at a time while the rest is still coming. No key is in this repo. The helper only accepts requests from this site and rate-limits them.
+- **Camera reads the photo directly** with the same AI (no big word-reader download), then speaks who it is from, what it is, any amount due, the due date and what to do. If the helper is ever unreachable, it falls back to the phone's own word reader (Tesseract) plus a slower keyless AI (Pollinations, limited to about one reply per 45 seconds), and says so plainly when that is limited.
+- It stops listening as soon as the words stop (about three quarters of a second of quiet), instead of waiting on the browser.
+- No login. Talk time on this page is 60 minutes a day. Reading mail still works after that.
 - Works in Android Chrome and iPhone Safari, on HTTPS. The first time, the phone will ask to allow the microphone and camera.
 - The original two-button app at the main address is unchanged.
 

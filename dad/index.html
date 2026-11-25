@@ -487,8 +487,9 @@
       const now = new Date().toLocaleString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
       return "You are Call AI, a warm, patient, straight-talking voice assistant for an older man, heard out loud on a phone speaker. " +
         "Right now it is " + now + ". " +
-        "Answer his question first, in one to three short spoken sentences, in plain everyday words. " +
-        "Be accurate. If you are not sure, or it may have changed, say so plainly instead of guessing. Never make up facts, names, numbers or phone numbers. " +
+        "He lives in the United States, in north Georgia, so assume US places, money, laws and news unless he says otherwise. " +
+        "Answer his question first, in one to three short spoken sentences, in plain everyday words. Answer only what he asked: do not add extra claims, comparisons or trivia. " +
+        "Be accurate. You cannot look anything up live. For anything that changes (weather, today's sunset time, prices, news, scores, store hours, who currently holds an office, phone numbers) say you cannot check that live and say where he can look, instead of guessing. Never make up facts, names, numbers or phone numbers. " +
         "No markdown, lists, emojis, links or symbols. Do not say you are an AI or a language model. Do not ask him to press buttons. " +
         "If you did not catch something, ask one short question. If he sounds sick or in danger, tell him to call 911.";
     }
@@ -601,7 +602,7 @@
       if (proxyKey === false && Date.now() - proxyCheckedAt > 120000) checkProxy(); // retry in the background later
       if (proxyKey !== false) {
         try {
-          const t = await streamPost(PROXY + '/api/chat', { messages: msgs, stream: true, max_tokens: opts.maxTokens || 250 }, onText, 12000);
+          const t = await streamPost(PROXY + '/api/chat', { messages: msgs, stream: true, max_tokens: opts.maxTokens || 250, search: !!opts.search }, onText, 12000);
           lastVia = 'fast'; return t;
         } catch (e) {
           if (e && e.status === 503) proxyKey = false;
@@ -722,6 +723,7 @@
       setCaption(text, true);
       return chatTurn(my);
     }
+    function needsLive(q) { return /\b(today|tonight|right now|current|currently|latest|news|weather|forecast|sunset|sunrise|price of|how much is|score|who won|open now|hours|president|governor|stock)\b/i.test(q || ''); }
     async function chatTurn(my) {
       const feeder = makeFeeder();
       feeder.onFirst = () => {
@@ -732,7 +734,7 @@
       let reply = '';
       stopSpeaking();
       try {
-        reply = cleanReply(await streamAI(buildChatMessages(), { maxTokens: 220, onText: (total) => {
+        reply = cleanReply(await streamAI(buildChatMessages(), { maxTokens: 220, search: needsLive(history.length ? history[history.length - 1].content : ''), onText: (total) => {
           if (my !== turnId || !open) return;
           feeder.feedTotal(total);
           setCaption(cleanReply(total));

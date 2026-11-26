@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="callai-version" content="1.0-dad" />
+  <meta name="callai-version" content="1.2-dad" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -177,6 +177,20 @@
     .pill { font-size: 1rem; padding: .7rem 1.1rem; border-radius: 999px; border: 0; background: #1a73e8; color: #fff; cursor: pointer; }
     .pill.ghost { background: #e8e8e8; color: #222; }
     .check { display: flex; gap: .5rem; align-items: center; font-weight: 400 !important; }
+    #callBtn {
+      position: fixed; inset: 0; z-index: 3;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: .8rem;
+      background: #0d652d; color: #fff; text-decoration: none;
+      padding: 2rem 1.2rem calc(2rem + var(--safe-b));
+      -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+      text-align: center;
+    }
+    #callBtn[hidden] { display: none !important; }
+    #callBtn svg { width: min(28vw, 120px); height: min(28vw, 120px); }
+    #callName { font-size: clamp(1.4rem, 5.5vw, 2.1rem); font-weight: 800; line-height: 1.2; text-shadow: 0 2px 8px rgba(0,0,0,.45); }
+    #callNum { font-size: clamp(2.2rem, 10vw, 4rem); font-weight: 900; letter-spacing: .08em; text-shadow: 0 2px 8px rgba(0,0,0,.45); }
+    #callHint { font-size: clamp(1.25rem, 5vw, 1.9rem); font-weight: 800; line-height: 1.25; text-shadow: 0 2px 8px rgba(0,0,0,.45); }
     [hidden] { display: none !important; }
   </style>
 </head>
@@ -193,6 +207,12 @@
       <p id="hint">Tap twice to read a letter or paper</p>
     </div>
   </button>
+  <a id="callBtn" hidden href="tel:" aria-label="Tap once to call this number">
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6.6 10.8a15.1 15.1 0 0 0 6.6 6.6l2.2-2.2c.3-.3.7-.4 1.1-.2 1.2.4 2.5.6 3.8.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.6.6 3.8.1.4 0 .8-.3 1.1L6.6 10.8Z"/></svg>
+    <span id="callName"></span>
+    <span id="callNum"></span>
+    <span id="callHint">Tap once to call</span>
+  </a>
   <form id="typeForm" autocomplete="off">
     <input id="typeInput" type="text" placeholder="Type what you want to say…" aria-label="Type your message" />
     <button type="submit">Send</button>
@@ -378,7 +398,7 @@
       try { synth.speak(u); } catch (e) { fin(); }
     }
     function queueSpeech(text) {
-      splitSentences(text).forEach(s => { speakingText += ' ' + s; V.q.push(s); });
+      splitSentences(expandPhonesForSpeech(text)).forEach(s => { speakingText += ' ' + s; V.q.push(s); });
       vNext();
     }
     function onIdle(cb) {
@@ -465,9 +485,11 @@
       }
       if (finalText.trim()) {
         clearEp();
+        clearListenSleep();
         setHint('');
         userSaid(finalText.trim());
       } else {
+        clearListenSleep();
         setHint(interim.trim() + '…');
         // Don't wait for the browser's slow end-of-speech: if the words stop changing for ~0.75s, go.
         epText = interim.trim();
@@ -475,6 +497,7 @@
         epTimer = setTimeout(() => {
           const said = epText; epTimer = null; epText = '';
           if (open && state === 'listening' && said.length >= 2) { stopListening(); userSaid(said); }
+          else if (open && state === 'listening') armListenSleep();
         }, EP_MS);
       }
     }
@@ -483,15 +506,25 @@
     function clearEp() { if (epTimer) { clearTimeout(epTimer); epTimer = null; } epText = ''; }
 
     // ---------- Conversation + AI ----------
-    function sysPrompt() {
-      const now = new Date().toLocaleString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
-      return "You are Call AI, a warm, patient, straight-talking voice assistant for an older man, heard out loud on a phone speaker. " +
-        "Right now it is " + now + ". " +
-        "He lives in the United States, in north Georgia, so assume US places, money, laws and news unless he says otherwise. " +
-        "Answer his question first, in one to three short spoken sentences, in plain everyday words. Answer only what he asked: do not add extra claims, comparisons or trivia. " +
-        "Be accurate. You cannot look anything up live. For anything that changes (weather, today's sunset time, prices, news, scores, store hours, who currently holds an office, phone numbers) say you cannot check that live and say where he can look, instead of guessing. Never make up facts, names, numbers or phone numbers. " +
-        "No markdown, lists, emojis, links or symbols. Do not say you are an AI or a language model. Do not ask him to press buttons. " +
-        "If you did not catch something, ask one short question. If he sounds sick or in danger, tell him to call 911.";
+    function sysPrompt(searchOn) {
+      const now = new Date().toLocaleString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York' });
+      let s = "You are Call AI, a warm, patient, straight-talking voice assistant for an older man, heard out loud on a phone speaker. " +
+        "He is 68 and cannot read, so say every fact out loud. Never tell him to look at the screen or read anything. " +
+        "Right now it is " + now + ", Eastern Time. " +
+        "He lives in Rossville, Georgia, right next to Chattanooga, Tennessee. Use that area for places, weather, stores and phone numbers unless he names another town. " +
+        "Answer his question first, in one to three short spoken sentences, in plain everyday words. No jargon. Answer only what he asked. ";
+      if (searchOn) {
+        s += "You can look things up on the internet right now. Use that for weather, news, prices, store hours, sports scores, and phone numbers or addresses. " +
+          "Only say a phone number or address if you actually found it. If you cannot find it, say so. Never invent a number, address, price, or score. " +
+          "If there is more than one matching place, say that and give both, starting with the closest. " +
+          "When you give a U.S. phone number, write it with dashes like 706-866-1633. Do not add extra offers to repeat or dial; I will do that. ";
+      } else {
+        s += "You cannot look anything up live right now. For anything that changes, like weather, prices, news, scores, store hours, or phone numbers, say you cannot check that live and say where he can look, instead of guessing. Never invent a number. ";
+      }
+      s += "No markdown, lists, emojis, links or symbols except dashes in phone numbers and dollar signs. Do not say you are an AI. " +
+        "Do not ask if he is still there, and do not ask if you can help with anything else. When you are done answering, just stop. " +
+        "If he sounds sick or in danger, tell him to call 911.";
+      return s;
     }
     const MAIL_PROMPT = "You read mail out loud to an older man who just pointed his phone camera at a piece of paper. " +
       "Start with ONE line in exactly this form: VERDICT: REAL or VERDICT: JUNK or VERDICT: SCAM or VERDICT: OTHER. " +
@@ -544,17 +577,122 @@
     // ---- Fast path: tiny proxy (Netlify) that holds the Groq key. Pollinations is only the fallback. ----
     const PROXY = 'https://dad-ai-proxy.netlify.app';
     let proxyKey = null, proxyCheckedAt = 0; // null = unknown, true = fast AI ready, false = no key / unreachable
+    let proxySearch = false, proxySearchLeft = 0;
     function checkProxy() {
       proxyCheckedAt = Date.now();
       const ctl = new AbortController(); const to = setTimeout(() => ctl.abort(), 5000);
       return fetch(PROXY + '/api/health', { signal: ctl.signal }).then(r => r.json())
-        .then(d => { proxyKey = !!(d && d.hasKey); }).catch(() => { proxyKey = false; }).finally(() => clearTimeout(to));
+        .then(d => {
+          proxyKey = !!(d && d.hasKey);
+          proxySearch = !!(d && d.search);
+          if (typeof d.searchLeft === 'number') proxySearchLeft = d.searchLeft;
+        }).catch(() => { proxyKey = false; }).finally(() => clearTimeout(to));
     }
     const proxyReady = checkProxy();
+    const HOME = { lat: 34.9831, lon: -85.2863, label: 'Rossville, Georgia, near Chattanooga' };
+    let here = null, hereTried = false;
+    function warmLocation() {
+      if (hereTried || !navigator.geolocation) { if (!here) here = HOME; return; }
+      hereTried = true;
+      navigator.geolocation.getCurrentPosition((pos) => {
+        here = { lat: pos.coords.latitude, lon: pos.coords.longitude, label: 'near you' };
+      }, () => { if (!here) here = HOME; }, { enableHighAccuracy: false, timeout: 8000, maximumAge: 600000 });
+    }
+    function getHere() {
+      return here || HOME;
+    }
+    const PHONE_RE = /(?:\+?1[\s.-]?)?(?:\(\d{3}\)|\d{3})[\s.-]?\d{3}[\s.-]?\d{4}\b/g;
+    const DIGIT_WORDS = ['zero','one','two','three','four','five','six','seven','eight','nine'];
+    function digitsOnly(s) {
+      const d = String(s || '').replace(/\D/g, '');
+      return d.length === 11 && d.charAt(0) === '1' ? d.slice(1) : d;
+    }
+    function prettyPhone(d) {
+      d = digitsOnly(d);
+      return d.length === 10 ? d.slice(0,3) + '-' + d.slice(3,6) + '-' + d.slice(6) : d;
+    }
+    function speakDigits(num) {
+      const d = digitsOnly(num);
+      if (d.length !== 10) return String(num || '');
+      const w = (part) => part.split('').map(c => DIGIT_WORDS[+c] || c).join(', ');
+      return w(d.slice(0,3)) + '. ' + w(d.slice(3,6)) + '. ' + w(d.slice(6));
+    }
+    function extractPhones(text) {
+      const out = [], seen = {};
+      String(text || '').replace(PHONE_RE, (m) => {
+        const d = digitsOnly(m);
+        if (d.length === 10 && !seen[d]) { seen[d] = true; out.push({ num: d, pretty: prettyPhone(d), label: '' }); }
+        return m;
+      });
+      return out;
+    }
+    function expandPhonesForSpeech(s) {
+      return String(s || '').replace(PHONE_RE, (m) => speakDigits(m));
+    }
+    function needsLive(q) {
+      return /\b(today|tonight|right now|current|currently|latest|news|weather|forecast|sunset|sunrise|price of|how much is|score|who won|open now|hours|president|governor|stock|phone|number for|call|address|directions|near me|nearby|close by|around here|what time)\b/i.test(q || '');
+    }
+    function needsPlace(q) {
+      return /\b(phone|number for|call|address|where is|how do i get|directions|near me|nearby|store hours|open now)\b/i.test(q || '');
+    }
+    function extractPlaceName(q) {
+      return String(q || '').replace(/[?.!]+$/g, '').replace(/\b(please|can you|what's|whats|what is|what's the|whats the|the|a|an|for|me|in rossville|rossville|georgia|ga|near me|nearby|phone number|phone|number|call|address of|address|where is|tell me)\b/gi, ' ').replace(/\s+/g, ' ').trim();
+    }
+    async function lookupPlaces(q) {
+      const loc = getHere();
+      const name = extractPlaceName(q) || q;
+      const hits = [], seen = {};
+      const add = (h) => {
+        if (!h) return;
+        const key = (h.phone && digitsOnly(h.phone)) || (h.name + '|' + (h.address || ''));
+        if (seen[key]) return;
+        seen[key] = true; hits.push(h);
+      };
+      try {
+        const safe = name.replace(/["\\]/g, ' ').slice(0, 80);
+        if (safe.length >= 3) {
+          const data = '[out:json][timeout:8];(nwr["name"~"' + safe + '",i](around:20000,' + loc.lat + ',' + loc.lon + '););out tags center;';
+          const r = await fetch('https://overpass-api.de/api/interpreter?data=' + encodeURIComponent(data), { signal: AbortSignal.timeout(8000) });
+          if (r.ok) {
+            const d = await r.json();
+            (d.elements || []).forEach((e) => {
+              const tags = e.tags || {};
+              const phone = tags.phone || tags['contact:phone'] || '';
+              const addr = [tags['addr:housenumber'], tags['addr:street'], tags['addr:city'] || tags['addr:state']].filter(Boolean).join(' ');
+              add({ name: tags.name || name, phone: digitsOnly(phone), address: addr, pretty: phone ? prettyPhone(phone) : '' });
+            });
+          }
+        }
+      } catch (e) { /* Overpass is optional */ }
+      try {
+        const qn = encodeURIComponent((name + ' ' + (loc.label || 'Rossville Georgia')).trim());
+        const r = await fetch('https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&extratags=1&limit=5&q=' + qn, { signal: AbortSignal.timeout(6000) });
+        if (r.ok) {
+          const d = await r.json();
+          (d || []).forEach((e) => {
+            const phone = (e.extratags && (e.extratags.phone || e.extratags['contact:phone'])) || '';
+            add({ name: e.name || name, phone: digitsOnly(phone), address: e.display_name || '', pretty: phone ? prettyPhone(phone) : '' });
+          });
+        }
+      } catch (e) { /* Nominatim is optional */ }
+      return hits.slice(0, 5);
+    }
+    function formatPlaceFacts(hits, loc) {
+      if (!hits.length) return '';
+      const lines = hits.map((h) => {
+        let s = h.name || 'a place';
+        if (h.address) s += ', ' + h.address;
+        if (h.pretty || h.phone) s += ', phone ' + (h.pretty || prettyPhone(h.phone));
+        else s += ', no phone listed';
+        return s;
+      });
+      return 'Places I already found near ' + (loc.label || 'Rossville, Georgia') + ': ' + lines.join('. ') +
+        '. Prefer these if they match what he asked. Do not invent other numbers. If a place has no phone listed, only give a number if your live search found it.';
+    }
     function flattenText(msgs) {
       return msgs.map(m => Array.isArray(m.content) ? { role: m.role, content: m.content.filter(p => p.type === 'text').map(p => p.text).join(' ') } : m);
     }
-    async function readSSE(resp, onDelta) {
+    async function readSSE(resp, onDelta, onMeta) {
       const reader = resp.body.getReader(); const dec = new TextDecoder(); let buf = '';
       for (;;) {
         const { done, value } = await reader.read();
@@ -568,12 +706,14 @@
           if (pl === '[DONE]') return;
           try {
             const j = JSON.parse(pl);
+            if (j.usage || j.searchQueries) { if (onMeta) onMeta(j); continue; }
             const c = j.choices && j.choices[0] && j.choices[0].delta && j.choices[0].delta.content;
             if (c) onDelta(c);
           } catch (e) { /* partial line */ }
         }
       }
     }
+    let lastSearchUsed = '', lastUsage = null;
     // POST that streams. Rejects before any text arrives if it cannot start; once text flows, errors just end the stream.
     async function streamPost(url, body, onTotal, firstMs) {
       const ctl = new AbortController();
@@ -583,8 +723,12 @@
       try {
         const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: ctl.signal });
         if (!r.ok) { const err = new Error('HTTP ' + r.status); err.status = r.status; throw err; }
+        lastSearchUsed = r.headers.get('x-search') || '';
+        const left = r.headers.get('x-search-left');
+        if (left != null && left !== '') proxySearchLeft = parseInt(left, 10);
+        lastUsage = null;
         try {
-          await readSSE(r, (d) => { clearTimeout(first); total += d; onTotal(total); });
+          await readSSE(r, (d) => { clearTimeout(first); total += d; onTotal(total); }, (meta) => { lastUsage = meta; });
         } catch (e) { if (!total) throw e; }
         if (!total) throw new Error('empty');
         return total;
@@ -694,8 +838,8 @@
     }
     function visionReady() { const p = settings.provider; return p !== 'free' && !!settings.key(p); }
 
-    function buildChatMessages() {
-      let sys = sysPrompt();
+    function buildChatMessages(searchOn) {
+      let sys = sysPrompt(searchOn);
       const pre = [];
       if (photo) {
         sys += " The caller just showed you a photo with their camera. ";
@@ -709,22 +853,86 @@
       }
       return [{ role: 'system', content: sys }].concat(pre, history);
     }
+    const LISTEN_SLEEP_MS = 20000;
+    let listenSleepTimer = null, saidSleepHint = false;
+    function clearListenSleep() {
+      if (listenSleepTimer) { clearTimeout(listenSleepTimer); listenSleepTimer = null; }
+    }
+    function armListenSleep() {
+      clearListenSleep();
+      if (!open) return;
+      listenSleepTimer = setTimeout(goQuietSleep, LISTEN_SLEEP_MS);
+    }
+    function goQuietSleep() {
+      listenSleepTimer = null;
+      if (!open) return;
+      turnId++;
+      open = false;
+      mode = 'idle';
+      if (tick) { clearInterval(tick); tick = null; }
+      stopListening();
+      stopSpeaking();
+      setState('idle');
+      showType(false);
+      if (pendingCall) {
+        setStatus('Tap once to call');
+        setHint('Or start talking again after you tap to talk.');
+        return; // stay quiet; a tap on the green screen calls, it does not wake talk
+      }
+      setStatus(IDLE_STATUS);
+      setHint(IDLE_HINT);
+      if (!saidSleepHint) {
+        saidSleepHint = true;
+        speak('Tap the screen when you need me.');
+      }
+    }
+        function isRepeat(t) { return /^(again|say again|repeat|repeat that|say that again|what was that|what was the number|say the number again)\b/i.test(norm(t)); }
+    function isCancelCall(t) { return /^(cancel|stop|don'?t call|do not call|never mind|no thanks|not now)\b/i.test(norm(t)); }
+    function isOtherNumber(t) { return /\b(the other|other store|other one|second one|mission ridge|the second)\b/i.test(norm(t)); }
     async function userSaid(text) {
       if (!open || !text) return;
       clearEp();
+      clearListenSleep();
+      if (lastPhones.length && isRepeat(text)) { lastIntent = 'repeat'; replayPhones(); return; }
+      if (pendingCall && isCancelCall(text)) {
+        lastIntent = 'cancel-call'; hideCallBtn();
+        speak('Okay, I will not call.', () => { ensureListening(); armListenSleep(); });
+        setState('listening'); setStatus('Listening…'); setHint('Tap once to stop.');
+        return;
+      }
+      if (lastPhones.length > 1 && isOtherNumber(text)) {
+        const cur = pendingCall && pendingCall.num;
+        const next = lastPhones.find(p => p.num !== cur) || lastPhones[1];
+        lastIntent = 'other-number';
+        showCallBtn(next);
+        stopSpeaking();
+        speak((next.label ? 'The other number, for ' + next.label + ', is ' : 'The other number is ') + speakDigits(next.num) +
+          '. Say again to hear it again. Or tap the screen once, and I will call them for you.', () => { ensureListening(); armListenSleep(); });
+        setState('speaking'); setStatus('Speaking…');
+        return;
+      }
+      hideCallBtn(false);
       const my = ++turnId;
       camTurn++;
       stopListening();
       history.push({ role: 'user', content: text });
       history = history.slice(-MAX_TURNS * 2);
       setState('thinking');
-      setStatus('Thinking…');
+      setStatus('Looking it up…');
       setHint('');
       setCaption(text, true);
       return chatTurn(my);
     }
-    function needsLive(q) { return /\b(today|tonight|right now|current|currently|latest|news|weather|forecast|sunset|sunrise|price of|how much is|score|who won|open now|hours|president|governor|stock)\b/i.test(q || ''); }
     async function chatTurn(my) {
+      const q = history.length ? history[history.length - 1].content : '';
+      const live = needsLive(q) || needsPlace(q);
+      const searchOn = live && proxySearch && proxySearchLeft !== 0;
+      if (needsPlace(q) || live) queueSpeech('Let me look that up.');
+      let placeNote = '';
+      if (needsPlace(q)) {
+        try { placeNote = formatPlaceFacts(await lookupPlaces(q), getHere()); } catch (e) {}
+      }
+      if (my !== turnId || !open) return;
       const feeder = makeFeeder();
       feeder.onFirst = () => {
         if (my !== turnId || !open) return;
@@ -732,9 +940,11 @@
         if (settings.bargeIn) setTimeout(() => { if (state === 'speaking') ensureListening(); }, 350);
       };
       let reply = '';
-      stopSpeaking();
+      // do not stopSpeaking here: the short "let me look that up" may still be in the queue
       try {
-        reply = cleanReply(await streamAI(buildChatMessages(), { maxTokens: 220, search: needsLive(history.length ? history[history.length - 1].content : ''), onText: (total) => {
+        const msgs = buildChatMessages(searchOn);
+        if (placeNote) msgs[0].content += ' ' + placeNote;
+        reply = cleanReply(await streamAI(msgs, { maxTokens: 280, search: searchOn, onText: (total) => {
           if (my !== turnId || !open) return;
           feeder.feedTotal(total);
           setCaption(cleanReply(total));
@@ -760,14 +970,57 @@
       history = history.slice(-MAX_TURNS * 2);
       lastReply = reply;
       setCaption(reply);
+      offerCallIfNeeded(reply);
+      if (searchOn && lastSearchUsed === 'capped') {
+        // Search was requested but the daily cap was hit; if the model still guessed, the prompt already told it not to.
+      }
       onIdle(() => {
         if (my !== turnId || !open) return;
-        setState('listening'); setStatus('Listening…'); setHint('Tap once to stop.');
+        setState('listening');
+        if (pendingCall) { setStatus('Tap once to call'); setHint('Or say again to hear the number.'); }
+        else { setStatus('Listening…'); setHint('I will wait a little, then rest.'); }
         ensureListening();
+        armListenSleep();
       });
     }
+    let pendingCall = null, lastPhones = [];
+    function showCallBtn(ph) {
+      pendingCall = ph;
+      const btn = $('callBtn');
+      if (!btn) return;
+      btn.href = 'tel:+1' + ph.num;
+      $('callName').textContent = ph.label || 'Call';
+      $('callNum').textContent = ph.pretty || prettyPhone(ph.num);
+      $('callHint').textContent = 'Tap once to call';
+      btn.hidden = false;
+      btn.setAttribute('aria-label', 'Tap once to call ' + (ph.pretty || ph.num));
+    }
+    function hideCallBtn(clear) {
+      pendingCall = null;
+      const btn = $('callBtn');
+      if (btn) { btn.hidden = true; btn.href = 'tel:'; }
+      if (clear !== false) lastPhones = [];
+    }
+    function offerCallIfNeeded(reply) {
+      const found = extractPhones(reply);
+      if (!found.length) { hideCallBtn(false); return; }
+      lastPhones = found;
+      showCallBtn(found[0]);
+      let offer = 'Say again to hear that number again. Or tap the screen once, and I will call them for you.';
+      if (found.length > 1) offer += ' Or say the other one if you want the other number.';
+      queueSpeech(offer);
+    }
+    function replayPhones() {
+      if (!lastPhones.length) return;
+      const ph = pendingCall || lastPhones[0];
+      showCallBtn(ph);
+      stopSpeaking();
+      const lead = ph.label ? 'The number for ' + ph.label + ' is ' : 'The number is ';
+      speak(lead + speakDigits(ph.num) + '. Say again to hear it again. Or tap the screen once, and I will call them for you.', () => { ensureListening(); armListenSleep(); });
+      setState('speaking'); setStatus('Speaking…');
+    }
 
-        // ---------- UI ----------
+    // ---------- UI ----------
     let state = 'idle', mode = 'idle', open = false, tick = null;
     let lastIntent = '';
     let pendingFilePick = false;
@@ -787,6 +1040,12 @@
       mode = 'idle';
       open = false;
       setState('idle');
+      if (pendingCall) {
+        setStatus('Tap once to call');
+        setHint('Or say again to hear the number.');
+        showType(false);
+        return;
+      }
       if (photo) {
         setStatus(photo.scam ? 'Possible scam' : photo.kind === 'junk' ? 'Junk mail' : photo.kind === 'real' ? 'Real mail' : 'I read it');
         setCaption([photo.headline, photo.short].filter(Boolean).join(' '));
@@ -803,11 +1062,18 @@
       open = false;
       mode = 'idle';
       turnId++;
+      clearListenSleep();
       if (tick) { clearInterval(tick); tick = null; }
       stopListening();
       stopSpeaking();
       setState('idle');
       showType(false);
+      if (pendingCall) {
+        setStatus('Tap once to call');
+        setHint('Or say again to hear the number.');
+        if (!silent) speak('Okay. Tap the screen once and I will call them. Or say again to hear the number again.');
+        return;
+      }
       if (photo) {
         setStatus(photo.scam ? 'Possible scam' : photo.kind === 'junk' ? 'Junk mail' : photo.kind === 'real' ? 'Real mail' : 'I read it');
         setCaption([photo.headline, photo.short].filter(Boolean).join(' '));
@@ -833,6 +1099,10 @@
       mode = 'talk';
       history = []; lastReply = '';
       // Keep last photo so a follow-up can use it.
+      hideCallBtn();
+      saidSleepHint = false;
+      clearListenSleep();
+      warmLocation();
       stopSpeaking();
       unlockSpeech();
       showType(!SR || micBlocked);
@@ -855,6 +1125,7 @@
         if (Math.max(0, LIMIT_MS - used) <= 0) closeTalk('Talk time is used for today', false);
       }, 1000);
       ensureListening();
+      armListenSleep();
       if (!SR || micBlocked) setTimeout(() => typeInput.focus(), 50);
     }
 
@@ -901,6 +1172,8 @@
       camUseFile = false;
       pendingFilePick = false;
       mode = 'camera';
+      hideCallBtn();
+      clearListenSleep();
       if (open) {
         open = false;
         if (tick) { clearInterval(tick); tick = null; }
@@ -1202,9 +1475,14 @@
       startCamera();
     }
 
+    const callBtn = $('callBtn');
+    if (callBtn) {
+      callBtn.addEventListener('pointerup', (e) => { e.stopPropagation(); lastIntent = 'call'; });
+      callBtn.addEventListener('click', () => { lastIntent = 'call'; });
+    }
     stage.addEventListener('pointerup', (e) => {
       if (e.button != null && e.button !== 0) return;
-      if (e.target && e.target.closest && e.target.closest('#gear, dialog, #typeForm, #filePick')) return;
+      if (e.target && e.target.closest && e.target.closest('#gear, dialog, #typeForm, #filePick, #callBtn')) return;
       e.preventDefault();
       unlockSpeech();
       onTap();
@@ -1288,7 +1566,7 @@
     }
 
     window.DadAI = {
-      version: '1.0-dad',
+      version: '1.2-dad',
       TAP_MS,
       get state() { return state; },
       get mode() { return mode; },
@@ -1305,7 +1583,17 @@
       parseMail,
       parseVerdict,
       get proxyKey() { return proxyKey; },
+      get proxySearch() { return proxySearch; },
+      get proxySearchLeft() { return proxySearchLeft; },
       get lastVia() { return lastVia; },
+      get lastSearchUsed() { return lastSearchUsed; },
+      get lastUsage() { return lastUsage; },
+      get pendingCall() { return pendingCall ? { num: pendingCall.num, pretty: pendingCall.pretty } : null; },
+      get lastPhones() { return lastPhones.slice(); },
+      extractPhones, speakDigits, prettyPhone, needsLive, needsPlace, expandPhonesForSpeech,
+      armListenSleep, goQuietSleep, clearListenSleep, LISTEN_SLEEP_MS,
+      get saidSleepHint() { return saidSleepHint; },
+
       streamAI,
       cleanOcr,
       ocrCanvas,
